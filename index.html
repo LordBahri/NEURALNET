@@ -53,7 +53,6 @@
     text-align: right;
     line-height: 1.8;
   }
-
   #minimap {
     position: fixed;
     bottom: 12px; left: 12px;
@@ -91,13 +90,9 @@
   'use strict';
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // CELL STATE ENUM  (only three valid values — no mixing)
+  // CELL STATE ENUM
   // ─────────────────────────────────────────────────────────────────────────────
-  const STATE = Object.freeze({
-    EMPTY:     0,
-    COMPONENT: 1,
-    LINK:      2,
-  });
+  const STATE = Object.freeze({ EMPTY: 0, COMPONENT: 1, LINK: 2 });
 
   // ─────────────────────────────────────────────────────────────────────────────
   // COMPONENT TYPE ENUM
@@ -111,13 +106,13 @@
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // WORLD DIMENSIONS
+  // WORLD CONSTANTS
   // ─────────────────────────────────────────────────────────────────────────────
   const GRID_COLS = 80;
   const GRID_ROWS = 80;
   const CELL_SIZE = 48;
-  const WORLD_W   = GRID_COLS * CELL_SIZE;
-  const WORLD_H   = GRID_ROWS * CELL_SIZE;
+  const WORLD_W   = GRID_COLS * CELL_SIZE;   // 3840
+  const WORLD_H   = GRID_ROWS * CELL_SIZE;   // 3840
 
   const ZOOM_MIN  = 0.25;
   const ZOOM_MAX  = 3.0;
@@ -125,25 +120,21 @@
   const CAM_SPEED = 6;
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // PALETTE  (keyed by component type where applicable)
+  // PALETTE
   // ─────────────────────────────────────────────────────────────────────────────
   const C = {
     bg:        0x000811,
     gridLine:  0x003322,
     gridMajor: 0x004433,
+    linkCore:  0x00cc88,
+    linkGlow:  0x00ffcc,
+    select:    0xffffff,
 
-    // link trace
-    linkCore: 0x00cc88,
-    linkGlow: 0x00ffcc,
-
-    // per-component-type: { fill, border, glow, css }
     [COMP.CPU]:           { fill: 0x001a3d, border: 0x0066ff, glow: 0x0099ff, css: '#0099ff' },
     [COMP.RAM]:           { fill: 0x001a2a, border: 0x00ccff, glow: 0x00eeff, css: '#00eeff' },
     [COMP.POWER]:         { fill: 0x2a1400, border: 0xff8800, glow: 0xffaa00, css: '#ffcc00' },
     [COMP.ENEMY_NODE]:    { fill: 0x1a0008, border: 0xff0044, glow: 0xff2255, css: '#ff4466' },
     [COMP.RESOURCE_NODE]: { fill: 0x001a0a, border: 0x00ff66, glow: 0x44ff88, css: '#00ff88' },
-
-    select: 0xffffff,
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -152,26 +143,20 @@
   function makeRng(seed) {
     let s = seed >>> 0;
     return () => {
-      s ^= s << 13;
-      s ^= s >> 17;
-      s ^= s << 5;
+      s ^= s << 13; s ^= s >> 17; s ^= s << 5;
       return (s >>> 0) / 0xffffffff;
     };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // GRID  — flat array, strict single-state-per-cell
-  //
-  // Cell shapes:
-  //   EMPTY     → { state: STATE.EMPTY }
-  //   COMPONENT → { state: STATE.COMPONENT, id, compType, pulse, speed }
-  //   LINK      → { state: STATE.LINK, fromId, toId, segIdx }
+  // GRID CLASS
+  //   Each cell is exactly one state — no mixing.
+  //   writeIfEmpty enforces exclusivity at write time.
   // ─────────────────────────────────────────────────────────────────────────────
   class Grid {
     constructor(cols, rows) {
       this.cols = cols;
       this.rows = rows;
-      // Initialise every cell as EMPTY
       this._cells = Array.from({ length: cols * rows }, () => ({ state: STATE.EMPTY }));
     }
 
@@ -184,17 +169,16 @@
       return this._cells[row * this.cols + col];
     }
 
-    // Unconditional write — caller must ensure no prior state conflict
     _write(col, row, cell) {
       if (!this.inBounds(col, row)) return false;
       this._cells[row * this.cols + col] = cell;
       return true;
     }
 
-    // Write only if the target cell is currently EMPTY — enforces exclusivity
+    // Only writes if the cell is currently EMPTY — enforces one-state-per-cell
     writeIfEmpty(col, row, cell) {
-      const existing = this.get(col, row);
-      if (!existing || existing.state !== STATE.EMPTY) return false;
+      const cur = this.get(col, row);
+      if (!cur || cur.state !== STATE.EMPTY) return false;
       return this._write(col, row, cell);
     }
 
@@ -205,21 +189,20 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // LINK PATH ROUTER  — Manhattan L-path, refuses to cross non-EMPTY cells
-  //
-  // Returns array of intermediate {col,row} (excludes endpoints) or null.
+  // LINK PATH ROUTER
+  //   Manhattan L-path; refuses to cross any non-EMPTY cell.
+  //   Returns intermediate [{col,row}] (excludes endpoints), or null if blocked.
   // ─────────────────────────────────────────────────────────────────────────────
   function routeLinkPath(grid, src, dst, horizFirst) {
     const cells = [];
-    let col = src.col;
-    let row = src.row;
+    let col = src.col, row = src.row;
 
-    const sc = dst.col > col ? 1 : dst.col < col ? -1 : 0;
-    const sr = dst.row > row ? 1 : dst.row < row ? -1 : 0;
+    const sc = Math.sign(dst.col - col);
+    const sr = Math.sign(dst.row - row);
 
     const step = (c, r) => {
-      // Skip endpoints
-      if ((c === src.col && r === src.row) || (c === dst.col && r === dst.row)) return true;
+      if (c === src.col && r === src.row) return true;
+      if (c === dst.col && r === dst.row) return true;
       if (!grid.isEmpty(c, r)) return false;
       cells.push({ col: c, row: r });
       return true;
@@ -237,14 +220,14 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // WORLD GENERATOR  — deterministic, seed-driven
+  // WORLD GENERATOR  — deterministic from seed
   // ─────────────────────────────────────────────────────────────────────────────
   function generateWorld(seed) {
     const rng  = makeRng(seed);
     const grid = new Grid(GRID_COLS, GRID_ROWS);
 
-    // --- Component placement ------------------------------------------------
-    const compBlueprint = [
+    // Component placement
+    const blueprint = [
       COMP.CPU, COMP.CPU,
       COMP.RAM, COMP.RAM, COMP.RAM, COMP.RAM,
       COMP.POWER, COMP.POWER, COMP.POWER,
@@ -257,7 +240,7 @@
     const components = [];
     let nextId = 1;
 
-    for (const compType of compBlueprint) {
+    for (const compType of blueprint) {
       for (let attempt = 0; attempt < 300; attempt++) {
         const col = 2 + Math.floor(rng() * (GRID_COLS - 4));
         const row = 2 + Math.floor(rng() * (GRID_ROWS - 4));
@@ -276,17 +259,11 @@
       }
     }
 
-    // --- Link routing -------------------------------------------------------
-    // A LINK cell connects exactly two COMPONENTs.
-    // Cannot exist alone; cannot be placed on a non-EMPTY cell.
-
-    const linkSegments = []; // { fromId, toId, cells:[{col,row}] }
-
-    // Track link count per component to cap density
-    const linkCount = {};
+    // Link routing — a LINK cell must connect exactly two COMPONENTs
+    const linkSegments = [];
+    const linkCount    = {};
     components.forEach(c => { linkCount[c.id] = 0; });
 
-    // Sort candidates by proximity so nearby nodes get linked first
     for (const src of components) {
       if (linkCount[src.id] >= 3) continue;
 
@@ -298,7 +275,7 @@
       for (const dst of nearby) {
         if (linkCount[src.id] >= 3) break;
         if (linkCount[dst.id] >= 3) continue;
-        if (dst.dist > 22) break;
+        if (dst.dist > 22)          break;
 
         const alreadyLinked = linkSegments.some(
           s => (s.fromId === src.id && s.toId === dst.id) ||
@@ -306,7 +283,6 @@
         );
         if (alreadyLinked) continue;
 
-        // Try both orientations
         const seg = routeLinkPath(grid, src, dst, rng() > 0.5)
                  ?? routeLinkPath(grid, src, dst, rng() <= 0.5);
         if (!seg) continue;
@@ -314,13 +290,9 @@
         const segIdx = linkSegments.length;
         linkSegments.push({ fromId: src.id, toId: dst.id, cells: seg });
 
-        // Write LINK cells — writeIfEmpty guarantees no overlap with components
         for (const { col, row } of seg) {
           grid.writeIfEmpty(col, row, {
-            state:  STATE.LINK,
-            fromId: src.id,
-            toId:   dst.id,
-            segIdx,
+            state: STATE.LINK, fromId: src.id, toId: dst.id, segIdx,
           });
         }
 
@@ -329,18 +301,7 @@
       }
     }
 
-    // --- Tally --------------------------------------------------------------
-    let emptyCells = 0, compCells = 0, linkCells = 0;
-    for (let r = 0; r < GRID_ROWS; r++) {
-      for (let c = 0; c < GRID_COLS; c++) {
-        const s = grid.get(c, r).state;
-        if      (s === STATE.EMPTY)     emptyCells++;
-        else if (s === STATE.COMPONENT) compCells++;
-        else if (s === STATE.LINK)      linkCells++;
-      }
-    }
-
-    return { grid, components, linkSegments, stats: { emptyCells, compCells, linkCells } };
+    return { grid, components, linkSegments };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -350,22 +311,21 @@
     constructor() {
       super({ key: 'PCBScene' });
 
-      const world = generateWorld(0xDEADBEEF);
+      const world       = generateWorld(0xDEADBEEF);
       this.grid         = world.grid;
       this.components   = world.components;
       this.linkSegments = world.linkSegments;
-      this.worldStats   = world.stats;
 
       this.camX          = WORLD_W / 2;
       this.camY          = WORLD_H / 2;
       this.zoom          = 1.0;
       this.isDragging    = false;
+      this._didDrag      = false;
       this.dragStartX    = 0;
       this.dragStartY    = 0;
       this.dragCamStartX = 0;
       this.dragCamStartY = 0;
-      this._didDrag      = false;
-      this.selectedCell  = null; // { col, row, cell }
+      this.selectedCell  = null;
       this.time_t        = 0;
       this.fpsTimer      = 0;
       this.fpsCount      = 0;
@@ -376,13 +336,17 @@
     preload() {}
 
     create() {
-      // Static baked layer — drawn once, never updated
-      this.staticLayer = this.add.renderTexture(0, 0, WORLD_W, WORLD_H);
+      // Static graphics — drawn once, stays in scene, Phaser renders via camera
+      this.staticGfx = this.add.graphics();
       this._drawStaticWorld();
 
-      // Dynamic layer — cleared & redrawn every frame
+      // Component labels — Text objects live in the scene at world coordinates
+      this._createLabels();
+
+      // Dynamic graphics — cleared and redrawn every frame
       this.dynGfx = this.add.graphics();
 
+      // Camera
       this.cameras.main.setBackgroundColor(C.bg);
       this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
       this.cameras.main.setZoom(this.zoom);
@@ -398,11 +362,11 @@
       });
 
       // Mouse wheel zoom
-      this.input.on('wheel', (ptr, _o, _dx, dy) => {
-        this._applyZoom(dy > 0 ? -ZOOM_STEP : ZOOM_STEP, ptr.x, ptr.y);
+      this.input.on('wheel', (_ptr, _o, _dx, dy) => {
+        this._applyZoom(dy > 0 ? -ZOOM_STEP : ZOOM_STEP, _ptr.x, _ptr.y);
       });
 
-      // Drag / pinch
+      // Drag
       this.input.on('pointerdown', (ptr) => {
         this.isDragging    = true;
         this._didDrag      = false;
@@ -411,9 +375,8 @@
         this.dragCamStartX = this.camX;
         this.dragCamStartY = this.camY;
       });
-
       this.input.on('pointermove', (ptr) => {
-        // Pinch-to-zoom (two fingers)
+        // Pinch-to-zoom
         const ptrs = this.input.manager.pointers.filter(p => p.isDown);
         if (ptrs.length >= 2) {
           const d = Phaser.Math.Distance.Between(ptrs[0].x, ptrs[0].y, ptrs[1].x, ptrs[1].y);
@@ -428,7 +391,6 @@
           return;
         }
         this.pinchDist = 0;
-
         if (!this.isDragging) return;
         const dx = (ptr.x - this.dragStartX) / this.zoom;
         const dy = (ptr.y - this.dragStartY) / this.zoom;
@@ -439,7 +401,6 @@
           this._clampCamera();
         }
       });
-
       this.input.on('pointerup', (ptr) => {
         if (!this._didDrag) this._handleClick(ptr);
         this.isDragging = false;
@@ -449,62 +410,56 @@
       this._buildMinimap();
     }
 
-    // ── Static world drawing ──────────────────────────────────────────────────
+    // ── Static world (Graphics object, drawn once) ────────────────────────────
     _drawStaticWorld() {
-      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      const g  = this.staticGfx;
+      const CS = CELL_SIZE;
 
       // Background
       g.fillStyle(C.bg);
       g.fillRect(0, 0, WORLD_W, WORLD_H);
 
-      // Minor grid lines
+      // Minor grid
       g.lineStyle(1, C.gridLine, 0.35);
       for (let c = 0; c <= GRID_COLS; c++) {
         g.beginPath();
-        g.moveTo(c * CELL_SIZE, 0);
-        g.lineTo(c * CELL_SIZE, WORLD_H);
+        g.moveTo(c * CS, 0);
+        g.lineTo(c * CS, WORLD_H);
         g.strokePath();
       }
       for (let r = 0; r <= GRID_ROWS; r++) {
         g.beginPath();
-        g.moveTo(0, r * CELL_SIZE);
-        g.lineTo(WORLD_W, r * CELL_SIZE);
+        g.moveTo(0, r * CS);
+        g.lineTo(WORLD_W, r * CS);
         g.strokePath();
       }
 
-      // Major grid lines every 8 cells
+      // Major grid every 8 cells
       g.lineStyle(1, C.gridMajor, 0.2);
       for (let c = 0; c <= GRID_COLS; c += 8) {
         g.beginPath();
-        g.moveTo(c * CELL_SIZE, 0);
-        g.lineTo(c * CELL_SIZE, WORLD_H);
+        g.moveTo(c * CS, 0);
+        g.lineTo(c * CS, WORLD_H);
         g.strokePath();
       }
       for (let r = 0; r <= GRID_ROWS; r += 8) {
         g.beginPath();
-        g.moveTo(0, r * CELL_SIZE);
-        g.lineTo(WORLD_W, r * CELL_SIZE);
+        g.moveTo(0, r * CS);
+        g.lineTo(WORLD_W, r * CS);
         g.strokePath();
       }
 
-      // LINK cells first (below components)
-      this._drawAllLinkCells(g);
+      // LINK cells
+      this._drawLinks(g);
 
-      // COMPONENT bodies
-      this._drawAllComponentBodies(g);
-
-      // Bake graphics into render texture
-      this.staticLayer.draw(g, 0, 0);
-      g.destroy();
-
-      // Component labels rendered on top of baked texture
-      this._drawAllComponentLabels();
+      // COMPONENT cells
+      this._drawComponents(g);
     }
 
-    _drawAllLinkCells(g) {
-      const { grid } = this;
+    _drawLinks(g) {
       const CS = CELL_SIZE;
       const HS = CS / 2;
+      const { grid } = this;
 
       for (let r = 0; r < GRID_ROWS; r++) {
         for (let c = 0; c < GRID_COLS; c++) {
@@ -513,37 +468,21 @@
           const cx = c * CS + HS;
           const cy = r * CS + HS;
 
-          // Check which neighbours are also LINK or COMPONENT (to draw correct segments)
           const connH = this._linkConnects(c - 1, r) || this._linkConnects(c + 1, r);
           const connV = this._linkConnects(c, r - 1) || this._linkConnects(c, r + 1);
 
           if (connH) {
-            // Glow pass
             g.lineStyle(6, C.linkGlow, 0.07);
-            g.beginPath();
-            g.moveTo(cx - HS, cy);
-            g.lineTo(cx + HS, cy);
-            g.strokePath();
-            // Core trace
+            g.beginPath(); g.moveTo(cx - HS, cy); g.lineTo(cx + HS, cy); g.strokePath();
             g.lineStyle(2, C.linkCore, 0.9);
-            g.beginPath();
-            g.moveTo(cx - HS, cy);
-            g.lineTo(cx + HS, cy);
-            g.strokePath();
+            g.beginPath(); g.moveTo(cx - HS, cy); g.lineTo(cx + HS, cy); g.strokePath();
           }
           if (connV) {
             g.lineStyle(6, C.linkGlow, 0.07);
-            g.beginPath();
-            g.moveTo(cx, cy - HS);
-            g.lineTo(cx, cy + HS);
-            g.strokePath();
+            g.beginPath(); g.moveTo(cx, cy - HS); g.lineTo(cx, cy + HS); g.strokePath();
             g.lineStyle(2, C.linkCore, 0.9);
-            g.beginPath();
-            g.moveTo(cx, cy - HS);
-            g.lineTo(cx, cy + HS);
-            g.strokePath();
+            g.beginPath(); g.moveTo(cx, cy - HS); g.lineTo(cx, cy + HS); g.strokePath();
           }
-          // Junction dot
           if (connH && connV) {
             g.fillStyle(C.linkGlow, 0.85);
             g.fillCircle(cx, cy, 3);
@@ -552,26 +491,27 @@
       }
     }
 
-    // Returns true if cell at col,row is LINK or COMPONENT (both carry signal)
     _linkConnects(col, row) {
       const cell = this.grid.get(col, row);
       return cell !== null && (cell.state === STATE.LINK || cell.state === STATE.COMPONENT);
     }
 
-    _drawAllComponentBodies(g) {
+    _drawComponents(g) {
       const CS = CELL_SIZE;
+      const HS = CS / 2;
+
       this.components.forEach(comp => {
-        const px = comp.col * CS;
-        const py = comp.row * CS;
-        const cx = px + CS / 2;
-        const cy = py + CS / 2;
+        const px  = comp.col * CS;
+        const py  = comp.row * CS;
+        const cx  = px + HS;
+        const cy  = py + HS;
         const pal = C[comp.compType];
 
         // Outer glow halo
         g.fillStyle(pal.glow, 0.07);
         g.fillRect(px - 5, py - 5, CS + 10, CS + 10);
 
-        // Cell body
+        // Body
         g.fillStyle(pal.fill, 1);
         g.fillRect(px + 2, py + 2, CS - 4, CS - 4);
 
@@ -580,8 +520,8 @@
         g.strokeRect(px + 2, py + 2, CS - 4, CS - 4);
 
         // Inner ring
-        g.lineStyle(1, pal.glow, 0.5);
-        g.strokeRect(px + 6, py + 6, CS - 12, CS - 12);
+        g.lineStyle(1, pal.glow, 0.4);
+        g.strokeRect(px + 7, py + 7, CS - 14, CS - 14);
 
         // Center diamond
         const dr = 7;
@@ -598,43 +538,42 @@
         g.fillStyle(pal.glow, 1);
         g.fillCircle(cx, cy, 2.5);
 
-        // Pin stubs on edges (shows connectivity to adjacent LINK cells)
-        const neighbors = [
-          { dc: -1, dr: 0, x1: px,          y1: cy, x2: px + 4,      y2: cy },
-          { dc:  1, dr: 0, x1: px + CS - 4, y1: cy, x2: px + CS,     y2: cy },
-          { dc:  0, dr: -1, x1: cx,          y1: py, x2: cx,          y2: py + 4 },
-          { dc:  0, dr:  1, x1: cx,          y1: py + CS - 4, x2: cx, y2: py + CS },
+        // Pin stubs toward connected LINK cells
+        const sides = [
+          { dc: -1, dr: 0, ax: px,          ay: cy, bx: px + 5,      by: cy },
+          { dc:  1, dr: 0, ax: px + CS - 5, ay: cy, bx: px + CS,     by: cy },
+          { dc:  0, dr: -1, ax: cx,          ay: py, bx: cx,          by: py + 5 },
+          { dc:  0, dr:  1, ax: cx,          ay: py + CS - 5, bx: cx, by: py + CS },
         ];
         g.lineStyle(2, pal.border, 0.7);
-        neighbors.forEach(n => {
-          const nc = this.grid.get(comp.col + n.dc, comp.row + n.dr);
+        sides.forEach(s => {
+          const nc = this.grid.get(comp.col + s.dc, comp.row + s.dr);
           if (nc && nc.state === STATE.LINK) {
             g.beginPath();
-            g.moveTo(n.x1, n.y1);
-            g.lineTo(n.x2, n.y2);
+            g.moveTo(s.ax, s.ay);
+            g.lineTo(s.bx, s.by);
             g.strokePath();
           }
         });
       });
     }
 
-    _drawAllComponentLabels() {
+    // Labels are Text objects living in the scene at world coordinates
+    _createLabels() {
       const CS = CELL_SIZE;
+      const short = {
+        [COMP.CPU]:           'CPU',
+        [COMP.RAM]:           'RAM',
+        [COMP.POWER]:         'PWR',
+        [COMP.ENEMY_NODE]:    'ENM',
+        [COMP.RESOURCE_NODE]: 'RES',
+      };
       this.components.forEach(comp => {
         const pal = C[comp.compType];
-        // Shorten long names for the single-cell display
-        const short = {
-          [COMP.CPU]:           'CPU',
-          [COMP.RAM]:           'RAM',
-          [COMP.POWER]:         'PWR',
-          [COMP.ENEMY_NODE]:    'ENM',
-          [COMP.RESOURCE_NODE]: 'RES',
-        }[comp.compType];
-
-        const lbl = this.add.text(
+        this.add.text(
           comp.col * CS + CS / 2,
           comp.row * CS + CS / 2,
-          short,
+          short[comp.compType],
           {
             fontSize: '9px',
             fontFamily: 'Courier New',
@@ -645,9 +584,6 @@
             align: 'center',
           }
         ).setOrigin(0.5, 0.5);
-
-        this.staticLayer.draw(lbl, 0, 0);
-        lbl.destroy();
       });
     }
 
@@ -658,14 +594,13 @@
     }
 
     _drawMinimapStatic() {
-      const ctx  = this._mmCtx;
-      const mw   = 120, mh = 120;
-      const sx   = mw / WORLD_W;
-      const sy   = mh / WORLD_H;
-      const CS   = CELL_SIZE;
-      const pw   = Math.max(1, CS * sx);
-      const ph   = Math.max(1, CS * sy);
-      const { grid, components } = this;
+      const ctx = this._mmCtx;
+      const mw = 120, mh = 120;
+      const sx = mw / WORLD_W;
+      const sy = mh / WORLD_H;
+      const CS = CELL_SIZE;
+      const pw = Math.max(1, CS * sx);
+      const ph = Math.max(1, CS * sy);
 
       ctx.fillStyle = '#000811';
       ctx.fillRect(0, 0, mw, mh);
@@ -674,13 +609,13 @@
       ctx.fillStyle = '#007755';
       for (let r = 0; r < GRID_ROWS; r++) {
         for (let c = 0; c < GRID_COLS; c++) {
-          if (grid.get(c, r).state === STATE.LINK) {
+          if (this.grid.get(c, r).state === STATE.LINK) {
             ctx.fillRect(c * CS * sx, r * CS * sy, pw, ph);
           }
         }
       }
 
-      // COMPONENT cells (colour coded)
+      // COMPONENT cells
       const mmColor = {
         [COMP.CPU]:           '#0066ff',
         [COMP.RAM]:           '#00ccff',
@@ -688,7 +623,7 @@
         [COMP.ENEMY_NODE]:    '#ff0044',
         [COMP.RESOURCE_NODE]: '#00ff66',
       };
-      components.forEach(comp => {
+      this.components.forEach(comp => {
         ctx.fillStyle = mmColor[comp.compType];
         ctx.fillRect(comp.col * CS * sx - 1, comp.row * CS * sy - 1, pw + 2, ph + 2);
       });
@@ -696,11 +631,11 @@
 
     _updateMinimapViewport() {
       const ctx = this._mmCtx;
-      const mw  = 120, mh = 120;
-      const sx  = mw / WORLD_W;
-      const sy  = mh / WORLD_H;
-      const W   = this.scale.width;
-      const H   = this.scale.height;
+      const mw = 120, mh = 120;
+      const sx = mw / WORLD_W;
+      const sy = mh / WORLD_H;
+      const W  = this.scale.width;
+      const H  = this.scale.height;
 
       this._drawMinimapStatic();
 
@@ -710,7 +645,7 @@
       const vy = (this.camY - (H / this.zoom) / 2) * sy;
 
       ctx.strokeStyle = '#00ffcc';
-      ctx.lineWidth   = 1;
+      ctx.lineWidth = 1;
       ctx.strokeRect(vx, vy, vw, vh);
     }
 
@@ -725,71 +660,60 @@
     }
 
     _applyZoom(delta, pivotX, pivotY) {
-      const W      = this.scale.width;
-      const H      = this.scale.height;
-      const oldZ   = this.zoom;
-      this.zoom    = Phaser.Math.Clamp(this.zoom + delta, ZOOM_MIN, ZOOM_MAX);
-      const wpx    = this.camX + (pivotX - W / 2) / oldZ;
-      const wpy    = this.camY + (pivotY - H / 2) / oldZ;
-      this.camX    = wpx - (pivotX - W / 2) / this.zoom;
-      this.camY    = wpy - (pivotY - H / 2) / this.zoom;
+      const W    = this.scale.width;
+      const H    = this.scale.height;
+      const oldZ = this.zoom;
+      this.zoom  = Phaser.Math.Clamp(this.zoom + delta, ZOOM_MIN, ZOOM_MAX);
+      const wpx  = this.camX + (pivotX - W / 2) / oldZ;
+      const wpy  = this.camY + (pivotY - H / 2) / oldZ;
+      this.camX  = wpx - (pivotX - W / 2) / this.zoom;
+      this.camY  = wpy - (pivotY - H / 2) / this.zoom;
       this._clampCamera();
       this.cameras.main.setZoom(this.zoom);
     }
 
-    // ── Click / inspect ───────────────────────────────────────────────────────
+    // ── Click inspector ───────────────────────────────────────────────────────
     _handleClick(ptr) {
-      const W    = this.scale.width;
-      const H    = this.scale.height;
-      const wx   = this.camX + (ptr.x - W / 2) / this.zoom;
-      const wy   = this.camY + (ptr.y - H / 2) / this.zoom;
-      const col  = Math.floor(wx / CELL_SIZE);
-      const row  = Math.floor(wy / CELL_SIZE);
+      const W   = this.scale.width;
+      const H   = this.scale.height;
+      const wx  = this.camX + (ptr.x - W / 2) / this.zoom;
+      const wy  = this.camY + (ptr.y - H / 2) / this.zoom;
+      const col = Math.floor(wx / CELL_SIZE);
+      const row = Math.floor(wy / CELL_SIZE);
       const cell = this.grid.get(col, row);
 
-      if (cell && cell.state !== STATE.EMPTY) {
-        this.selectedCell = { col, row, cell };
-      } else {
-        this.selectedCell = null;
-      }
-
-      this._updateCellInfoHUD();
+      this.selectedCell = (cell && cell.state !== STATE.EMPTY) ? { col, row, cell } : null;
+      this._refreshCellHUD();
     }
 
-    _updateCellInfoHUD() {
+    _refreshCellHUD() {
       const el = document.getElementById('hud-cell-info');
-      if (!this.selectedCell) {
-        el.textContent = '';
-        return;
-      }
+      if (!this.selectedCell) { el.textContent = ''; return; }
       const { col, row, cell } = this.selectedCell;
       if (cell.state === STATE.COMPONENT) {
-        const { compType, id } = cell;
         el.innerHTML =
           `STATE: <span>COMPONENT</span><br>` +
-          `TYPE: <span>${compType}</span><br>` +
-          `ID: <span>#${id}</span><br>` +
-          `CELL: <span>${col},${row}</span>`;
-      } else if (cell.state === STATE.LINK) {
+          `TYPE&nbsp;: <span>${cell.compType}</span><br>` +
+          `ID&nbsp;&nbsp;&nbsp;: <span>#${cell.id}</span>  CELL: <span>${col},${row}</span>`;
+      } else {
         el.innerHTML =
           `STATE: <span>LINK</span><br>` +
-          `FROM: <span>#${cell.fromId}</span>` +
-          ` → TO: <span>#${cell.toId}</span><br>` +
-          `CELL: <span>${col},${row}</span>`;
+          `FROM&nbsp;: <span>#${cell.fromId}</span> → <span>#${cell.toId}</span><br>` +
+          `CELL&nbsp;: <span>${col},${row}</span>`;
       }
     }
 
-    // ── Main update ───────────────────────────────────────────────────────────
+    // ── Update loop ───────────────────────────────────────────────────────────
     update(_time, delta) {
       this.time_t += delta * 0.001;
 
-      // FPS
+      // FPS counter
       this.fpsCount++;
       this.fpsTimer += delta;
       if (this.fpsTimer >= 500) {
         this.fpsDisplay = Math.round(this.fpsCount / (this.fpsTimer / 1000));
-        this.fpsCount   = 0;
-        this.fpsTimer   = 0;
+        this.fpsCount = 0;
+        this.fpsTimer = 0;
       }
 
       // Keyboard pan
@@ -801,7 +725,6 @@
       this._clampCamera();
       this.cameras.main.centerOn(this.camX, this.camY);
 
-      // Animate dynamic layer
       this._updateDynamic();
 
       // HUD
@@ -814,21 +737,21 @@
       this._updateMinimapViewport();
     }
 
-    // ── Dynamic animations (pulse halos, signal dots, selection) ─────────────
+    // ── Dynamic layer (pulses, signals, selection) ────────────────────────────
     _updateDynamic() {
       const g = this.dynGfx;
       g.clear();
-      const t = this.time_t;
+      const t  = this.time_t;
+      const CS = CELL_SIZE;
 
       // Component pulse halos
       this.components.forEach(comp => {
-        const cx  = comp.col * CELL_SIZE + CELL_SIZE / 2;
-        const cy  = comp.row * CELL_SIZE + CELL_SIZE / 2;
+        const cx  = comp.col * CS + CS / 2;
+        const cy  = comp.row * CS + CS / 2;
         const ph  = Math.sin(t * comp.speed + comp.pulse);
         const r   = 22 + ph * 5;
         const al  = 0.06 + 0.09 * ((ph + 1) / 2);
         const pal = C[comp.compType];
-
         g.lineStyle(1.5, pal.glow, al);
         g.strokeCircle(cx, cy, r);
         g.lineStyle(1, pal.glow, al * 0.4);
@@ -842,9 +765,8 @@
         const idx    = Math.floor(((t / period) % 1) * seg.cells.length);
         const c      = seg.cells[idx];
         if (!c) return;
-        const cx = c.col * CELL_SIZE + CELL_SIZE / 2;
-        const cy = c.row * CELL_SIZE + CELL_SIZE / 2;
-
+        const cx = c.col * CS + CS / 2;
+        const cy = c.row * CS + CS / 2;
         g.fillStyle(C.linkGlow, 0.95);
         g.fillCircle(cx, cy, 3);
         g.fillStyle(C.linkGlow, 0.18);
@@ -854,34 +776,30 @@
       // Selected cell highlight
       if (this.selectedCell) {
         const { col, row, cell } = this.selectedCell;
-        const px    = col * CELL_SIZE;
-        const py    = row * CELL_SIZE;
-        const cx    = px + CELL_SIZE / 2;
-        const cy    = py + CELL_SIZE / 2;
+        const px    = col * CS;
+        const py    = row * CS;
+        const cx    = px + CS / 2;
+        const cy    = py + CS / 2;
         const pulse = 0.5 + 0.5 * Math.sin(t * 4);
 
-        // Bounding rect
         g.lineStyle(2, C.select, pulse);
-        g.strokeRect(px, py, CELL_SIZE, CELL_SIZE);
+        g.strokeRect(px, py, CS, CS);
 
         if (cell.state === STATE.COMPONENT) {
           const pal = C[cell.compType];
           g.lineStyle(1, pal.glow, pulse * 0.9);
           g.strokeCircle(cx, cy, 28);
-
-          // Crosshair arms outside cell
-          const arm = 14;
-          const gap = CELL_SIZE / 2 + 3;
-          g.lineStyle(1, C.select, pulse * 0.45);
+          const gap = CS / 2 + 3, arm = 14;
+          g.lineStyle(1, C.select, pulse * 0.4);
           g.beginPath();
           g.moveTo(cx - gap - arm, cy); g.lineTo(cx - gap, cy);
-          g.moveTo(cx + gap, cy);       g.lineTo(cx + gap + arm, cy);
+          g.moveTo(cx + gap,       cy); g.lineTo(cx + gap + arm, cy);
           g.moveTo(cx, cy - gap - arm); g.lineTo(cx, cy - gap);
           g.moveTo(cx, cy + gap);       g.lineTo(cx, cy + gap + arm);
           g.strokePath();
         } else if (cell.state === STATE.LINK) {
           g.lineStyle(1, C.linkGlow, pulse * 0.7);
-          g.strokeRect(px + 4, py + 4, CELL_SIZE - 8, CELL_SIZE - 8);
+          g.strokeRect(px + 4, py + 4, CS - 8, CS - 8);
         }
       }
     }
@@ -909,10 +827,10 @@
     });
   }
 
-  const script    = document.createElement('script');
-  script.src      = 'https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js';
-  script.onload   = boot;
-  script.onerror  = () => {
+  const script   = document.createElement('script');
+  script.src     = 'https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js';
+  script.onload  = boot;
+  script.onerror = () => {
     document.body.innerHTML =
       '<div style="color:#ff0044;padding:20px;font-family:monospace">' +
       'ERROR: Could not load Phaser 3. Check your internet connection.</div>';
