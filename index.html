@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>NEURALNET — PCB Grid World</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+    touch-action: none;
+  }
+  #game-container {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas { display: block; }
+  #hud {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    color: #00ffcc;
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-shadow: 0 0 8px #00ffcc;
+    pointer-events: none;
+    line-height: 1.8;
+  }
+  #hud .title {
+    font-size: 16px;
+    font-weight: bold;
+    letter-spacing: 3px;
+    color: #ff00ff;
+    text-shadow: 0 0 12px #ff00ff;
+    margin-bottom: 4px;
+  }
+  #controls {
+    position: fixed;
+    bottom: 12px;
+    right: 12px;
+    color: #0088ff;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-shadow: 0 0 6px #0088ff;
+    pointer-events: none;
+    text-align: right;
+    line-height: 1.8;
+  }
+  #minimap {
+    position: fixed;
+    bottom: 12px;
+    left: 12px;
+    width: 120px;
+    height: 120px;
+    border: 1px solid #00ffcc44;
+    background: #000811;
+  }
+  #minimap canvas { width: 120px; height: 120px; }
+</style>
+</head>
+<body>
+<div id="game-container"></div>
+<div id="hud">
+  <div class="title">NEURALNET</div>
+  <div id="hud-coords">SECTOR: 0,0</div>
+  <div id="hud-zoom">ZOOM: 1.00x</div>
+  <div id="hud-fps">FPS: --</div>
+</div>
+<div id="controls">
+  DRAG: pan world<br>
+  SCROLL/PINCH: zoom<br>
+  WASD / ARROWS: move<br>
+  CLICK: select node
+</div>
+<div id="minimap"><canvas id="minimap-canvas" width="120" height="120"></canvas></div>
+
+<script>
+// ─── Phaser 3 via CDN (inline-compatible fallback path) ───────────────────────
+(function () {
+  'use strict';
+
+  // ── Constants ────────────────────────────────────────────────────────────────
+  const GRID_COLS       = 80;
+  const GRID_ROWS       = 80;
+  const CELL_SIZE       = 48;
+  const WORLD_W         = GRID_COLS * CELL_SIZE;
+  const WORLD_H         = GRID_ROWS * CELL_SIZE;
+  const ZOOM_MIN        = 0.25;
+  const ZOOM_MAX        = 3.0;
+  const ZOOM_STEP       = 0.1;
+  const CAM_SPEED       = 6;
+
+  // ── Palette ──────────────────────────────────────────────────────────────────
+  const C = {
+    bg:         0x000811,
+    gridLine:   0x003322,
+    gridGlow:   0x00ffcc,
+    trace:      0x00cc88,
+    traceGlow:  0x00ffcc,
+    via:        0x00ffcc,
+    viaCore:    0xffffff,
+    chip:       0x001133,
+    chipBorder: 0x0066ff,
+    chipGlow:   0x0099ff,
+    capacitor:  0xff6600,
+    resistor:   0xffcc00,
+    node:       0xff00ff,
+    nodeGlow:   0xff44ff,
+    highlight:  0xffffff,
+    copper:     0xcc6600,
+  };
+
+  // ── Seeded PRNG ──────────────────────────────────────────────────────────────
+  function makeRng(seed) {
+    let s = seed >>> 0;
+    return function () {
+      s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+      return (s >>> 0) / 0xffffffff;
+    };
+  }
+
+  // ── PCB world generator ──────────────────────────────────────────────────────
+  function generateWorld(seed) {
+    const rng = makeRng(seed);
+
+    // Traces (horizontal + vertical runs)
+    const traces = [];
+    for (let i = 0; i < 120; i++) {
+      const isH = rng() > 0.5;
+      const col  = Math.floor(rng() * GRID_COLS);
+      const row  = Math.floor(rng() * GRID_ROWS);
+      const len  = 2 + Math.floor(rng() * 12);
+      traces.push({ isH, col, row, len });
+    }
+
+    // Vias (trace junctions)
+    const vias = [];
+    for (let i = 0; i < 60; i++) {
+      vias.push({
+        col: Math.floor(rng() * GRID_COLS),
+        row: Math.floor(rng() * GRID_ROWS),
+      });
+    }
+
+    // ICs / chips
+    const chips = [];
+    for (let i = 0; i < 14; i++) {
+      chips.push({
+        col:  Math.floor(rng() * (GRID_COLS - 6)) + 2,
+        row:  Math.floor(rng() * (GRID_ROWS - 4)) + 2,
+        w:    2 + Math.floor(rng() * 5),
+        h:    2 + Math.floor(rng() * 3),
+        pins: 4 + Math.floor(rng() * 12),
+        label: ['CPU', 'GPU', 'RAM', 'ROM', 'I/O', 'DSP', 'CLK', 'VRM', 'PWR', 'SPI', 'I2C', 'MCU', 'FPGA', 'ADC'][i % 14],
+      });
+    }
+
+    // Passive components
+    const passives = [];
+    for (let i = 0; i < 80; i++) {
+      passives.push({
+        col:  Math.floor(rng() * GRID_COLS),
+        row:  Math.floor(rng() * GRID_ROWS),
+        type: rng() > 0.5 ? 'cap' : 'res',
+        horiz: rng() > 0.5,
+      });
+    }
+
+    // Nodes (interactive hotspots)
+    const nodes = [];
+    for (let i = 0; i < 30; i++) {
+      nodes.push({
+        col:   Math.floor(rng() * GRID_COLS),
+        row:   Math.floor(rng() * GRID_ROWS),
+        pulse: rng() * Math.PI * 2,
+        speed: 0.02 + rng() * 0.04,
+      });
+    }
+
+    return { traces, vias, chips, passives, nodes };
+  }
+
+  // ── Phaser Scene ─────────────────────────────────────────────────────────────
+  class PCBScene extends Phaser.Scene {
+    constructor() {
+      super({ key: 'PCBScene' });
+      this.world         = generateWorld(0xDEADBEEF);
+      this.camX          = WORLD_W / 2;
+      this.camY          = WORLD_H / 2;
+      this.zoom          = 1.0;
+      this.keys          = {};
+      this.isDragging    = false;
+      this.dragStartX    = 0;
+      this.dragStartY    = 0;
+      this.dragCamStartX = 0;
+      this.dragCamStartY = 0;
+      this.selectedNode  = null;
+      this.time_t        = 0;
+      this.fpsTimer      = 0;
+      this.fpsCount      = 0;
+      this.fpsDisplay    = 60;
+      // pinch
+      this.pinchDist     = 0;
+    }
+
+    preload() {}
+
+    create() {
+      const W = this.scale.width;
+      const H = this.scale.height;
+
+      // ── Render textures ──────────────────────────────────────────────────────
+      this.bgTexture    = this.add.renderTexture(0, 0, WORLD_W, WORLD_H);
+      this.staticLayer  = this.add.renderTexture(0, 0, WORLD_W, WORLD_H);
+      this.dynamicGroup = this.add.group();
+
+      this._drawStaticWorld();
+
+      // Dynamic overlay graphics (glow pulses, selected node)
+      this.dynGfx = this.add.graphics();
+
+      // ── Camera ───────────────────────────────────────────────────────────────
+      this.cameras.main.setBackgroundColor(C.bg);
+      this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
+      this.cameras.main.setZoom(this.zoom);
+      this.cameras.main.centerOn(this.camX, this.camY);
+
+      // ── Input — keyboard ─────────────────────────────────────────────────────
+      this.cursors = this.input.keyboard.createCursorKeys();
+      this.wasd    = this.input.keyboard.addKeys({
+        up: Phaser.Input.Keyboard.KeyCodes.W,
+        down: Phaser.Input.Keyboard.KeyCodes.S,
+        left: Phaser.Input.Keyboard.KeyCodes.A,
+        right: Phaser.Input.Keyboard.KeyCodes.D,
+      });
+
+      // ── Input — mouse wheel ──────────────────────────────────────────────────
+      this.input.on('wheel', (ptr, objs, dx, dy) => {
+        const delta = dy > 0 ? -ZOOM_STEP : ZOOM_STEP;
+        this._applyZoom(delta, ptr.x, ptr.y);
+      });
+
+      // ── Input — pointer drag ─────────────────────────────────────────────────
+      this.input.on('pointerdown', (ptr) => {
+        this.isDragging    = true;
+        this.dragStartX    = ptr.x;
+        this.dragStartY    = ptr.y;
+        this.dragCamStartX = this.camX;
+        this.dragCamStartY = this.camY;
+        this._handleClick(ptr);
+      });
+      this.input.on('pointermove', (ptr) => {
+        if (!this.isDragging) return;
+        const dx = (ptr.x - this.dragStartX) / this.zoom;
+        const dy = (ptr.y - this.dragStartY) / this.zoom;
+        if (Math.abs(dx) + Math.abs(dy) > 4) {
+          this.camX = this.dragCamStartX - dx;
+          this.camY = this.dragCamStartY - dy;
+          this._clampCamera();
+        }
+      });
+      this.input.on('pointerup', () => { this.isDragging = false; });
+
+      // ── Input — pinch to zoom ────────────────────────────────────────────────
+      this.input.on('pointermove', (ptr) => {
+        const ptrs = this.input.manager.pointers.filter(p => p.isDown);
+        if (ptrs.length >= 2) {
+          const d = Phaser.Math.Distance.Between(
+            ptrs[0].x, ptrs[0].y, ptrs[1].x, ptrs[1].y
+          );
+          if (this.pinchDist > 0) {
+            const delta = (d - this.pinchDist) * 0.005;
+            this._applyZoom(delta,
+              (ptrs[0].x + ptrs[1].x) / 2,
+              (ptrs[0].y + ptrs[1].y) / 2
+            );
+          }
+          this.pinchDist = d;
+        } else {
+          this.pinchDist = 0;
+        }
+      });
+
+      // ── Minimap ──────────────────────────────────────────────────────────────
+      this._buildMinimap();
+    }
+
+    // ── Draw static PCB layers ─────────────────────────────────────────────────
+    _drawStaticWorld() {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+
+      // Background fill
+      g.fillStyle(C.bg);
+      g.fillRect(0, 0, WORLD_W, WORLD_H);
+
+      // Grid lines (minor)
+      g.lineStyle(1, C.gridLine, 0.4);
+      for (let c = 0; c <= GRID_COLS; c++) {
+        g.beginPath();
+        g.moveTo(c * CELL_SIZE, 0);
+        g.lineTo(c * CELL_SIZE, WORLD_H);
+        g.strokePath();
+      }
+      for (let r = 0; r <= GRID_ROWS; r++) {
+        g.beginPath();
+        g.moveTo(0, r * CELL_SIZE);
+        g.lineTo(WORLD_W, r * CELL_SIZE);
+        g.strokePath();
+      }
+
+      // Grid accent lines every 8 cells
+      g.lineStyle(1, C.gridGlow, 0.12);
+      for (let c = 0; c <= GRID_COLS; c += 8) {
+        g.beginPath();
+        g.moveTo(c * CELL_SIZE, 0);
+        g.lineTo(c * CELL_SIZE, WORLD_H);
+        g.strokePath();
+      }
+      for (let r = 0; r <= GRID_ROWS; r += 8) {
+        g.beginPath();
+        g.moveTo(0, r * CELL_SIZE);
+        g.lineTo(WORLD_W, r * CELL_SIZE);
+        g.strokePath();
+      }
+
+      this._drawTraces(g);
+      this._drawVias(g);
+      this._drawChips(g);
+      this._drawPassives(g);
+      this._drawNodes(g);
+
+      this.staticLayer.draw(g, 0, 0);
+      g.destroy();
+    }
+
+    _drawTraces(g) {
+      const { traces } = this.world;
+      traces.forEach(t => {
+        const x = t.col * CELL_SIZE + CELL_SIZE / 2;
+        const y = t.row * CELL_SIZE + CELL_SIZE / 2;
+        const len = t.len * CELL_SIZE;
+
+        // Glow
+        g.lineStyle(6, C.traceGlow, 0.08);
+        g.beginPath();
+        if (t.isH) { g.moveTo(x, y); g.lineTo(x + len, y); }
+        else        { g.moveTo(x, y); g.lineTo(x, y + len); }
+        g.strokePath();
+
+        // Core
+        g.lineStyle(2, C.trace, 0.9);
+        g.beginPath();
+        if (t.isH) { g.moveTo(x, y); g.lineTo(x + len, y); }
+        else        { g.moveTo(x, y); g.lineTo(x, y + len); }
+        g.strokePath();
+      });
+    }
+
+    _drawVias(g) {
+      this.world.vias.forEach(v => {
+        const x = v.col * CELL_SIZE + CELL_SIZE / 2;
+        const y = v.row * CELL_SIZE + CELL_SIZE / 2;
+        g.fillStyle(C.via, 0.3);
+        g.fillCircle(x, y, 9);
+        g.fillStyle(C.via, 1);
+        g.fillCircle(x, y, 5);
+        g.fillStyle(C.viaCore, 1);
+        g.fillCircle(x, y, 2);
+      });
+    }
+
+    _drawChips(g) {
+      this.world.chips.forEach(chip => {
+        const px = chip.col * CELL_SIZE;
+        const py = chip.row * CELL_SIZE;
+        const pw = chip.w  * CELL_SIZE;
+        const ph = chip.h  * CELL_SIZE;
+
+        // Glow shadow
+        g.fillStyle(C.chipGlow, 0.07);
+        g.fillRect(px - 4, py - 4, pw + 8, ph + 8);
+
+        // Body
+        g.fillStyle(C.chip, 1);
+        g.fillRect(px, py, pw, ph);
+
+        // Border
+        g.lineStyle(2, C.chipBorder, 1);
+        g.strokeRect(px, py, pw, ph);
+
+        // Corner notch
+        g.lineStyle(1, C.chipGlow, 0.8);
+        g.beginPath();
+        g.arc(px + 10, py, 5, 0, Math.PI, false);
+        g.strokePath();
+
+        // Pin markers
+        const pinSpacing = pw / (Math.min(chip.pins, 8) + 1);
+        for (let p = 0; p < Math.min(chip.pins, 8); p++) {
+          const px2 = px + pinSpacing * (p + 1);
+          g.fillStyle(C.copper, 1);
+          g.fillRect(px2 - 1, py - 5, 3, 5);
+          g.fillRect(px2 - 1, py + ph, 3, 5);
+        }
+
+        // Label
+        // (drawn via Phaser text objects for crisp rendering)
+        const label = this.add.text(
+          px + pw / 2, py + ph / 2,
+          chip.label,
+          {
+            fontSize: '10px',
+            fontFamily: 'Courier New',
+            color: '#0099ff',
+            stroke: '#000033',
+            strokeThickness: 2,
+            align: 'center',
+          }
+        ).setOrigin(0.5);
+        this.staticLayer.draw(label, 0, 0);
+        label.destroy();
+      });
+    }
+
+    _drawPassives(g) {
+      this.world.passives.forEach(p => {
+        const cx = p.col * CELL_SIZE + CELL_SIZE / 2;
+        const cy = p.row * CELL_SIZE + CELL_SIZE / 2;
+        const color = p.type === 'cap' ? C.capacitor : C.resistor;
+
+        if (p.horiz) {
+          // Leads
+          g.lineStyle(1, C.trace, 0.7);
+          g.beginPath(); g.moveTo(cx - 16, cy); g.lineTo(cx - 8, cy); g.strokePath();
+          g.beginPath(); g.moveTo(cx + 8, cy);  g.lineTo(cx + 16, cy); g.strokePath();
+          // Body
+          g.fillStyle(color, 1);
+          g.fillRect(cx - 8, cy - 4, 16, 8);
+          g.lineStyle(1, color, 0.4);
+          g.strokeRect(cx - 8, cy - 4, 16, 8);
+        } else {
+          g.lineStyle(1, C.trace, 0.7);
+          g.beginPath(); g.moveTo(cx, cy - 16); g.lineTo(cx, cy - 8); g.strokePath();
+          g.beginPath(); g.moveTo(cx, cy + 8);  g.lineTo(cx, cy + 16); g.strokePath();
+          g.fillStyle(color, 1);
+          g.fillRect(cx - 4, cy - 8, 8, 16);
+          g.lineStyle(1, color, 0.4);
+          g.strokeRect(cx - 4, cy - 8, 8, 16);
+        }
+      });
+    }
+
+    _drawNodes(g) {
+      this.world.nodes.forEach(n => {
+        const cx = n.col * CELL_SIZE + CELL_SIZE / 2;
+        const cy = n.row * CELL_SIZE + CELL_SIZE / 2;
+        g.fillStyle(C.nodeGlow, 0.15);
+        g.fillCircle(cx, cy, 14);
+        g.fillStyle(C.node, 1);
+        g.fillCircle(cx, cy, 7);
+        g.lineStyle(1, C.nodeGlow, 0.6);
+        g.strokeCircle(cx, cy, 10);
+      });
+    }
+
+    // ── Minimap ────────────────────────────────────────────────────────────────
+    _buildMinimap() {
+      const canvas = document.getElementById('minimap-canvas');
+      this._minimapCtx = canvas.getContext('2d');
+      this._drawMinimapStatic();
+    }
+
+    _drawMinimapStatic() {
+      const ctx = this._minimapCtx;
+      const mw = 120, mh = 120;
+      const scaleX = mw / WORLD_W;
+      const scaleY = mh / WORLD_H;
+
+      ctx.fillStyle = '#000811';
+      ctx.fillRect(0, 0, mw, mh);
+
+      // Traces
+      ctx.strokeStyle = '#00cc88';
+      ctx.lineWidth = 0.5;
+      this.world.traces.forEach(t => {
+        const x = (t.col * CELL_SIZE + CELL_SIZE / 2) * scaleX;
+        const y = (t.row * CELL_SIZE + CELL_SIZE / 2) * scaleY;
+        const len = t.len * CELL_SIZE;
+        ctx.beginPath();
+        if (t.isH) { ctx.moveTo(x, y); ctx.lineTo(x + len * scaleX, y); }
+        else        { ctx.moveTo(x, y); ctx.lineTo(x, y + len * scaleY); }
+        ctx.stroke();
+      });
+
+      // Chips
+      this.world.chips.forEach(c => {
+        ctx.fillStyle = '#001133';
+        ctx.strokeStyle = '#0066ff';
+        ctx.lineWidth = 0.5;
+        ctx.fillRect(c.col * CELL_SIZE * scaleX, c.row * CELL_SIZE * scaleY,
+                     c.w * CELL_SIZE * scaleX, c.h * CELL_SIZE * scaleY);
+        ctx.strokeRect(c.col * CELL_SIZE * scaleX, c.row * CELL_SIZE * scaleY,
+                       c.w * CELL_SIZE * scaleX, c.h * CELL_SIZE * scaleY);
+      });
+
+      // Nodes
+      this.world.nodes.forEach(n => {
+        ctx.fillStyle = '#ff00ff';
+        ctx.beginPath();
+        ctx.arc(
+          (n.col * CELL_SIZE + CELL_SIZE / 2) * scaleX,
+          (n.row * CELL_SIZE + CELL_SIZE / 2) * scaleY,
+          1.5, 0, Math.PI * 2
+        );
+        ctx.fill();
+      });
+    }
+
+    _updateMinimapViewport() {
+      const ctx = this._minimapCtx;
+      const mw = 120, mh = 120;
+      const scaleX = mw / WORLD_W;
+      const scaleY = mh / WORLD_H;
+      const W = this.scale.width;
+      const H = this.scale.height;
+
+      this._drawMinimapStatic();
+
+      // Viewport rect
+      const vw = (W / this.zoom) * scaleX;
+      const vh = (H / this.zoom) * scaleY;
+      const vx = (this.camX - W / this.zoom / 2) * scaleX;
+      const vy = (this.camY - H / this.zoom / 2) * scaleY;
+
+      ctx.strokeStyle = '#00ffcc';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(vx, vy, vw, vh);
+    }
+
+    // ── Camera helpers ─────────────────────────────────────────────────────────
+    _clampCamera() {
+      const W = this.scale.width;
+      const H = this.scale.height;
+      const hw = (W / 2) / this.zoom;
+      const hh = (H / 2) / this.zoom;
+      this.camX = Phaser.Math.Clamp(this.camX, hw, WORLD_W - hw);
+      this.camY = Phaser.Math.Clamp(this.camY, hh, WORLD_H - hh);
+    }
+
+    _applyZoom(delta, pivotX, pivotY) {
+      const W = this.scale.width;
+      const H = this.scale.height;
+      const oldZoom = this.zoom;
+      this.zoom = Phaser.Math.Clamp(this.zoom + delta, ZOOM_MIN, ZOOM_MAX);
+
+      // Zoom toward pointer
+      const worldPX = this.camX + (pivotX - W / 2) / oldZoom;
+      const worldPY = this.camY + (pivotY - H / 2) / oldZoom;
+      this.camX = worldPX - (pivotX - W / 2) / this.zoom;
+      this.camY = worldPY - (pivotY - H / 2) / this.zoom;
+
+      this._clampCamera();
+      this.cameras.main.setZoom(this.zoom);
+    }
+
+    // ── Click/tap interaction ──────────────────────────────────────────────────
+    _handleClick(ptr) {
+      const W = this.scale.width;
+      const H = this.scale.height;
+      const worldX = this.camX + (ptr.x - W / 2) / this.zoom;
+      const worldY = this.camY + (ptr.y - H / 2) / this.zoom;
+      const col = Math.floor(worldX / CELL_SIZE);
+      const row = Math.floor(worldY / CELL_SIZE);
+
+      let hit = null;
+      for (const n of this.world.nodes) {
+        if (n.col === col && n.row === row) { hit = n; break; }
+        if (Math.abs(n.col - col) <= 1 && Math.abs(n.row - row) <= 1) { hit = n; }
+      }
+      this.selectedNode = hit;
+    }
+
+    // ── Main update loop ───────────────────────────────────────────────────────
+    update(time, delta) {
+      this.time_t += delta * 0.001;
+
+      // FPS counter
+      this.fpsCount++;
+      this.fpsTimer += delta;
+      if (this.fpsTimer >= 500) {
+        this.fpsDisplay = Math.round(this.fpsCount / (this.fpsTimer / 1000));
+        this.fpsCount = 0;
+        this.fpsTimer = 0;
+      }
+
+      // Keyboard camera movement
+      const speed = CAM_SPEED / this.zoom;
+      if (this.cursors.left.isDown  || this.wasd.left.isDown)  this.camX -= speed;
+      if (this.cursors.right.isDown || this.wasd.right.isDown) this.camX += speed;
+      if (this.cursors.up.isDown    || this.wasd.up.isDown)    this.camY -= speed;
+      if (this.cursors.down.isDown  || this.wasd.down.isDown)  this.camY += speed;
+      this._clampCamera();
+      this.cameras.main.centerOn(this.camX, this.camY);
+
+      // Dynamic glow animation
+      this._updateDynamic();
+
+      // HUD
+      const col = Math.floor(this.camX / CELL_SIZE);
+      const row = Math.floor(this.camY / CELL_SIZE);
+      document.getElementById('hud-coords').textContent =
+        `SECTOR: ${col},${row}`;
+      document.getElementById('hud-zoom').textContent =
+        `ZOOM: ${this.zoom.toFixed(2)}x`;
+      document.getElementById('hud-fps').textContent =
+        `FPS: ${this.fpsDisplay}`;
+
+      // Minimap
+      this._updateMinimapViewport();
+    }
+
+    _updateDynamic() {
+      const g = this.dynGfx;
+      g.clear();
+
+      const t = this.time_t;
+
+      // Pulse nodes
+      this.world.nodes.forEach(n => {
+        const cx = n.col * CELL_SIZE + CELL_SIZE / 2;
+        const cy = n.row * CELL_SIZE + CELL_SIZE / 2;
+        const phase = Math.sin(t * n.speed * 60 + n.pulse);
+        const r = 12 + phase * 6;
+        const alpha = 0.1 + 0.15 * ((phase + 1) / 2);
+
+        g.lineStyle(1.5, C.nodeGlow, alpha);
+        g.strokeCircle(cx, cy, r);
+        g.lineStyle(1, C.nodeGlow, alpha * 0.5);
+        g.strokeCircle(cx, cy, r + 5);
+      });
+
+      // Selected node highlight
+      if (this.selectedNode) {
+        const n = this.selectedNode;
+        const cx = n.col * CELL_SIZE + CELL_SIZE / 2;
+        const cy = n.row * CELL_SIZE + CELL_SIZE / 2;
+        const pulse = 0.6 + 0.4 * Math.sin(t * 4);
+
+        g.lineStyle(2, C.highlight, pulse);
+        g.strokeCircle(cx, cy, 18);
+        g.lineStyle(1, C.nodeGlow, pulse * 0.7);
+        g.strokeCircle(cx, cy, 24);
+
+        // Cross-hair
+        g.lineStyle(1, C.highlight, pulse * 0.5);
+        g.beginPath();
+        g.moveTo(cx - 30, cy); g.lineTo(cx - 18, cy);
+        g.moveTo(cx + 18, cy); g.lineTo(cx + 30, cy);
+        g.moveTo(cx, cy - 30); g.lineTo(cx, cy - 18);
+        g.moveTo(cx, cy + 18); g.lineTo(cx, cy + 30);
+        g.strokePath();
+      }
+
+      // Trace pulse — animate a travelling dot along random traces
+      const traceIdx = Math.floor(t * 2) % this.world.traces.length;
+      const tr = this.world.traces[traceIdx];
+      if (tr) {
+        const progress = (t * 2) % 1;
+        const sx = tr.col * CELL_SIZE + CELL_SIZE / 2;
+        const sy = tr.row * CELL_SIZE + CELL_SIZE / 2;
+        const ex = tr.isH
+          ? sx + tr.len * CELL_SIZE * progress
+          : sx;
+        const ey = tr.isH
+          ? sy
+          : sy + tr.len * CELL_SIZE * progress;
+        g.fillStyle(C.traceGlow, 0.9);
+        g.fillCircle(ex, ey, 3);
+        g.fillStyle(C.traceGlow, 0.2);
+        g.fillCircle(ex, ey, 7);
+      }
+    }
+  }
+
+  // ── Bootstrap Phaser ─────────────────────────────────────────────────────────
+  function boot() {
+    const config = {
+      type: Phaser.AUTO,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      backgroundColor: '#000811',
+      parent: 'game-container',
+      scene: PCBScene,
+      scale: {
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+      },
+      render: {
+        antialias: true,
+        powerPreference: 'high-performance',
+      },
+    };
+    new Phaser.Game(config);
+  }
+
+  // Load Phaser from CDN then boot
+  const script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js';
+  script.onload = boot;
+  script.onerror = () => {
+    document.body.innerHTML =
+      '<div style="color:#ff0044;padding:20px;font-family:monospace">' +
+      'ERROR: Could not load Phaser 3. Check your internet connection.</div>';
+  };
+  document.head.appendChild(script);
+})();
+</script>
+</body>
+</html>
