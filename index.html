@@ -8,65 +8,39 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
 
-  #c {
-    display: block;
-    position: fixed;
-    top: 0; left: 0;
-    touch-action: none;
-  }
+  #c { display:block; position:fixed; top:0; left:0; touch-action:none; }
 
-  /* ── HUD ── */
   #hud {
-    position: fixed;
-    top: 12px; left: 12px;
+    position: fixed; top: 12px; left: 12px;
     font: 11px/1.85 'Courier New', monospace;
-    letter-spacing: 1px;
-    pointer-events: none;
-    user-select: none;
+    letter-spacing: 1px; pointer-events: none; user-select: none;
   }
-  .hud-title {
-    font-size: 16px;
-    font-weight: bold;
-    letter-spacing: 3px;
-    color: #ff00ff;
-    text-shadow: 0 0 12px #ff00ff;
-    margin-bottom: 4px;
-  }
-  .hud-row    { color: #00ffcc; text-shadow: 0 0 7px #00ffcc; }
-  .hud-sep    { border-top: 1px solid rgba(0,255,204,0.12); margin: 5px 0 3px; }
+  .hud-title { font-size:16px; font-weight:bold; letter-spacing:3px; color:#ff00ff; text-shadow:0 0 12px #ff00ff; margin-bottom:4px; }
+  .hud-row   { color:#00ffcc; text-shadow:0 0 7px #00ffcc; }
+  .hud-sep   { border-top:1px solid rgba(0,255,204,0.12); margin:5px 0 3px; }
 
-  #res-energy { color: #ffcc00; text-shadow: 0 0 6px #ffaa00; }
-  #res-cpu    { color: #0099ff; text-shadow: 0 0 5px #0066ff; }
-  #res-ram    { color: #00eeff; text-shadow: 0 0 5px #00ccff; }
-  #res-nodes  { color: #bb55ff; text-shadow: 0 0 5px #8833cc; }
-  #hud-msg    { color: #ff4466; text-shadow: 0 0 6px #ff2244; font-size: 10px; min-height: 15px; letter-spacing: 1px; }
-  #hud-cell   { color: #aaffdd; font-size: 10px; line-height: 1.7; min-height: 28px; }
-  #hud-cell b { color: #fff; font-weight: normal; }
+  #res-energy { color:#ffcc00; text-shadow:0 0 6px #ffaa00; }
+  #res-nodes  { color:#bb55ff; text-shadow:0 0 5px #8833cc; }
+  #res-net    { color:#00ff88; text-shadow:0 0 5px #00cc66; font-size:10px; }
+  #hud-msg    { color:#ff4466; text-shadow:0 0 6px #ff2244; font-size:10px; min-height:15px; }
+  #hud-cell   { color:#aaffdd; font-size:10px; line-height:1.7; min-height:28px; }
+  #hud-cell b { color:#fff; font-weight:normal; }
+  #hud-path   { color:#aa66ff; font-size:10px; min-height:15px; }
 
-  /* ── Controls panel ── */
   #ctrl {
-    position: fixed;
-    bottom: 12px; right: 12px;
-    color: #0088ff;
-    font: 10px/1.8 'Courier New', monospace;
-    letter-spacing: 1px;
-    text-shadow: 0 0 5px #0066ff;
-    pointer-events: none;
-    text-align: right;
+    position:fixed; bottom:12px; right:12px;
+    color:#0088ff; font:10px/1.8 'Courier New',monospace;
+    letter-spacing:1px; text-shadow:0 0 5px #0066ff;
+    pointer-events:none; text-align:right;
   }
-
-  /* ── Minimap ── */
   #minimap {
-    position: fixed;
-    bottom: 12px; left: 12px;
-    width: 120px; height: 120px;
-    border: 1px solid rgba(0,255,204,0.2);
-    background: #000811;
+    position:fixed; bottom:12px; left:12px;
+    width:120px; height:120px;
+    border:1px solid rgba(0,255,204,0.2); background:#000811;
   }
 </style>
 </head>
 <body>
-
 <canvas id="c"></canvas>
 
 <div id="hud">
@@ -76,17 +50,17 @@
   <div class="hud-row" id="hud-fps">FPS: --</div>
   <div class="hud-sep"></div>
   <div id="res-energy">ENERGY ░░░░░░░░░░ 0/100</div>
-  <div id="res-cpu">CPU CAP  1</div>
-  <div id="res-ram">RAM CAP  2</div>
-  <div id="res-nodes">NODES    1</div>
+  <div id="res-nodes">NODES  0/0 CONNECTED</div>
+  <div id="res-net">NETWORK: INITIALIZING</div>
   <div class="hud-sep"></div>
   <div id="hud-msg"></div>
+  <div id="hud-path"></div>
   <div id="hud-cell"></div>
 </div>
 
 <div id="ctrl">
-  CLICK EMPTY: expand node<br>
-  CLICK OWN NODE: select<br>
+  CLICK EMPTY: expand<br>
+  CLICK NODE: select / trace path<br>
   DRAG: pan camera<br>
   SCROLL / PINCH: zoom<br>
   WASD / ARROWS: pan
@@ -98,235 +72,231 @@
 (function () {
   'use strict';
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // CELL STATE ENUM
-  // ─────────────────────────────────────────────────────────────────────────────
-  const STATE = Object.freeze({ EMPTY: 0, COMPONENT: 1, LINK: 2 });
+  // ── Cell state ──────────────────────────────────────────────────────────────
+  const STATE = Object.freeze({ EMPTY:0, COMPONENT:1, LINK:2 });
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // COMPONENT TYPES  — world + player
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ── Component types ─────────────────────────────────────────────────────────
   const COMP = Object.freeze({
-    CPU:           'CPU',
-    RAM:           'RAM',
-    POWER:         'POWER',
-    ENEMY_NODE:    'ENEMY_NODE',
-    RESOURCE_NODE: 'RESOURCE_NODE',
-    CORE_NODE:     'CORE_NODE',    // player origin
-    PLAYER_NODE:   'PLAYER_NODE',  // player expansion
+    CPU:'CPU', RAM:'RAM', POWER:'POWER',
+    ENEMY_NODE:'ENEMY_NODE', RESOURCE_NODE:'RESOURCE_NODE',
+    CORE_NODE:'CORE_NODE', PLAYER_NODE:'PLAYER_NODE',
   });
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // WORLD DIMENSIONS
-  // ─────────────────────────────────────────────────────────────────────────────
-  const GRID_COLS = 80;
-  const GRID_ROWS = 80;
-  const CS        = 48;
-  const WORLD_W   = GRID_COLS * CS;
-  const WORLD_H   = GRID_ROWS * CS;
+  // ── World dims ──────────────────────────────────────────────────────────────
+  const GRID_COLS=80, GRID_ROWS=80, CS=48;
+  const WORLD_W=GRID_COLS*CS, WORLD_H=GRID_ROWS*CS;
+  const ZOOM_MIN=0.2, ZOOM_MAX=4.0, CAM_SPEED=5;
 
-  const ZOOM_MIN  = 0.2;
-  const ZOOM_MAX  = 4.0;
-  const CAM_SPEED = 5;
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // PALETTE
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ── Palette ─────────────────────────────────────────────────────────────────
   const PAL = {
-    bg:        '#000811',
-    gridMinor: 'rgba(0,80,50,0.3)',
-    gridMajor: 'rgba(0,120,80,0.18)',
-    linkCore:  '#00cc88',
-    linkGlow:  '#00ffcc',
-    plinkCore: '#8833dd',   // player link
-    plinkGlow: '#bb66ff',
-
-    [COMP.CPU]:           { fill:'#001a3d', border:'#0066ff', glow:'#0099ff', dot:'#0099ff' },
-    [COMP.RAM]:           { fill:'#001a2a', border:'#00ccff', glow:'#00eeff', dot:'#00eeff' },
-    [COMP.POWER]:         { fill:'#2a1400', border:'#ff8800', glow:'#ffaa00', dot:'#ffcc00' },
-    [COMP.ENEMY_NODE]:    { fill:'#1a0008', border:'#ff0044', glow:'#ff2255', dot:'#ff4466' },
-    [COMP.RESOURCE_NODE]: { fill:'#001a0a', border:'#00ff66', glow:'#44ff88', dot:'#00ff88' },
-    [COMP.CORE_NODE]:     { fill:'#160022', border:'#dd66ff', glow:'#ff88ff', dot:'#ffffff' },
-    [COMP.PLAYER_NODE]:   { fill:'#0d001a', border:'#8833dd', glow:'#aa55ff', dot:'#cc88ff' },
+    bg:'#000811', gridMinor:'rgba(0,80,50,0.3)', gridMajor:'rgba(0,120,80,0.18)',
+    linkCore:'#00cc88', linkGlow:'#00ffcc',
+    plinkCore:'#8833dd', plinkGlow:'#bb66ff',
+    plinkDim:'#332244',  plinkDimGlow:'#443355',
+    heartbeat:'#dd99ff',
+    [COMP.CPU]:           {fill:'#001a3d',border:'#0066ff',glow:'#0099ff',dot:'#0099ff'},
+    [COMP.RAM]:           {fill:'#001a2a',border:'#00ccff',glow:'#00eeff',dot:'#00eeff'},
+    [COMP.POWER]:         {fill:'#2a1400',border:'#ff8800',glow:'#ffaa00',dot:'#ffcc00'},
+    [COMP.ENEMY_NODE]:    {fill:'#1a0008',border:'#ff0044',glow:'#ff2255',dot:'#ff4466'},
+    [COMP.RESOURCE_NODE]: {fill:'#001a0a',border:'#00ff66',glow:'#44ff88',dot:'#00ff88'},
+    [COMP.CORE_NODE]:     {fill:'#160022',border:'#dd66ff',glow:'#ff88ff',dot:'#ffffff'},
+    [COMP.PLAYER_NODE]:   {fill:'#0d001a',border:'#8833dd',glow:'#aa55ff',dot:'#cc88ff'},
   };
-
   const COMP_SHORT = {
-    [COMP.CPU]:           'CPU',
-    [COMP.RAM]:           'RAM',
-    [COMP.POWER]:         'PWR',
-    [COMP.ENEMY_NODE]:    'ENM',
-    [COMP.RESOURCE_NODE]: 'RES',
-    [COMP.CORE_NODE]:     'CORE',
-    [COMP.PLAYER_NODE]:   'NODE',
+    [COMP.CPU]:'CPU',[COMP.RAM]:'RAM',[COMP.POWER]:'PWR',
+    [COMP.ENEMY_NODE]:'ENM',[COMP.RESOURCE_NODE]:'RES',
+    [COMP.CORE_NODE]:'CORE',[COMP.PLAYER_NODE]:'NODE',
   };
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // HELPERS
-  // ─────────────────────────────────────────────────────────────────────────────
-  function hexAlpha(hex, a) {
-    const r = parseInt(hex.slice(1,3),16);
-    const g = parseInt(hex.slice(3,5),16);
-    const b = parseInt(hex.slice(5,7),16);
-    return `rgba(${r},${g},${b},${a})`;
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+  function hexAlpha(hex,a){
+    return `rgba(${parseInt(hex.slice(1,3),16)},${parseInt(hex.slice(3,5),16)},${parseInt(hex.slice(5,7),16)},${a})`;
+  }
+  function makeRng(seed){
+    let s=seed>>>0;
+    return ()=>{s^=s<<13;s^=s>>17;s^=s<<5;return(s>>>0)/0xffffffff;};
   }
 
-  function makeRng(seed) {
-    let s = seed >>> 0;
-    return () => { s^=s<<13; s^=s>>17; s^=s<<5; return (s>>>0)/0xffffffff; };
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // GRID CLASS  — one atomic state per cell, enforced at write time
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ── Grid ────────────────────────────────────────────────────────────────────
   class Grid {
-    constructor(cols, rows) {
-      this.cols = cols;
-      this.rows = rows;
-      this._cells = new Array(cols * rows).fill(null).map(() => ({ state: STATE.EMPTY }));
+    constructor(cols,rows){
+      this.cols=cols; this.rows=rows;
+      this._cells=new Array(cols*rows).fill(null).map(()=>({state:STATE.EMPTY}));
     }
-    inBounds(c,r) { return c>=0 && c<this.cols && r>=0 && r<this.rows; }
-    get(c,r)      { return this.inBounds(c,r) ? this._cells[r*this.cols+c] : null; }
-    _set(c,r,v)   { if(this.inBounds(c,r)){this._cells[r*this.cols+c]=v;return true;}return false; }
-    writeIfEmpty(c,r,v) {
-      const cur = this.get(c,r);
-      if(!cur || cur.state!==STATE.EMPTY) return false;
-      return this._set(c,r,v);
-    }
-    forceWrite(c,r,v) { return this._set(c,r,v); }
-    isEmpty(c,r)  { const v=this.get(c,r); return v!==null && v.state===STATE.EMPTY; }
+    inBounds(c,r){return c>=0&&c<this.cols&&r>=0&&r<this.rows;}
+    get(c,r)     {return this.inBounds(c,r)?this._cells[r*this.cols+c]:null;}
+    _set(c,r,v)  {if(this.inBounds(c,r)){this._cells[r*this.cols+c]=v;return true;}return false;}
+    writeIfEmpty(c,r,v){const cur=this.get(c,r);if(!cur||cur.state!==STATE.EMPTY)return false;return this._set(c,r,v);}
+    isEmpty(c,r) {const v=this.get(c,r);return v!==null&&v.state===STATE.EMPTY;}
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // LINK ROUTER  — Manhattan L-path through EMPTY cells only
-  // ─────────────────────────────────────────────────────────────────────────────
-  function routeLink(grid, src, dst, hFirst) {
-    const cells = [];
-    let c=src.col, r=src.row;
-    const sc=Math.sign(dst.col-c), sr=Math.sign(dst.row-r);
-    const step = (nc,nr) => {
-      if(nc===src.col&&nr===src.row) return true;
-      if(nc===dst.col&&nr===dst.row) return true;
-      if(!grid.isEmpty(nc,nr)) return false;
-      cells.push({col:nc,row:nr}); return true;
+  // ── Link router ─────────────────────────────────────────────────────────────
+  function routeLink(grid,src,dst,hFirst){
+    const cells=[];let c=src.col,r=src.row;
+    const sc=Math.sign(dst.col-c),sr=Math.sign(dst.row-r);
+    const step=(nc,nr)=>{
+      if(nc===src.col&&nr===src.row)return true;
+      if(nc===dst.col&&nr===dst.row)return true;
+      if(!grid.isEmpty(nc,nr))return false;
+      cells.push({col:nc,row:nr});return true;
     };
-    if(hFirst){
-      while(c!==dst.col){c+=sc;if(!step(c,r))return null;}
-      while(r!==dst.row){r+=sr;if(!step(c,r))return null;}
-    } else {
-      while(r!==dst.row){r+=sr;if(!step(c,r))return null;}
-      while(c!==dst.col){c+=sc;if(!step(c,r))return null;}
-    }
-    return cells.length>0 ? cells : null;
+    if(hFirst){while(c!==dst.col){c+=sc;if(!step(c,r))return null;}while(r!==dst.row){r+=sr;if(!step(c,r))return null;}}
+    else      {while(r!==dst.row){r+=sr;if(!step(c,r))return null;}while(c!==dst.col){c+=sc;if(!step(c,r))return null;}}
+    return cells.length>0?cells:null;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // WORLD GENERATOR
-  // ─────────────────────────────────────────────────────────────────────────────
-  function generateWorld(seed) {
-    const rng  = makeRng(seed);
-    const grid = new Grid(GRID_COLS, GRID_ROWS);
-    const blueprint = [
-      COMP.CPU, COMP.CPU,
-      COMP.RAM, COMP.RAM, COMP.RAM, COMP.RAM,
-      COMP.POWER, COMP.POWER, COMP.POWER,
-      COMP.ENEMY_NODE, COMP.ENEMY_NODE, COMP.ENEMY_NODE,
-      COMP.ENEMY_NODE, COMP.ENEMY_NODE, COMP.ENEMY_NODE,
-      COMP.RESOURCE_NODE, COMP.RESOURCE_NODE, COMP.RESOURCE_NODE,
-      COMP.RESOURCE_NODE, COMP.RESOURCE_NODE, COMP.RESOURCE_NODE,
+  // ── World generator ─────────────────────────────────────────────────────────
+  function generateWorld(seed){
+    const rng=makeRng(seed);
+    const grid=new Grid(GRID_COLS,GRID_ROWS);
+    const blueprint=[
+      COMP.CPU,COMP.CPU,
+      COMP.RAM,COMP.RAM,COMP.RAM,COMP.RAM,
+      COMP.POWER,COMP.POWER,COMP.POWER,
+      COMP.ENEMY_NODE,COMP.ENEMY_NODE,COMP.ENEMY_NODE,
+      COMP.ENEMY_NODE,COMP.ENEMY_NODE,COMP.ENEMY_NODE,
+      COMP.RESOURCE_NODE,COMP.RESOURCE_NODE,COMP.RESOURCE_NODE,
+      COMP.RESOURCE_NODE,COMP.RESOURCE_NODE,COMP.RESOURCE_NODE,
     ];
+    const components=[];let nextId=1;
+    const cc=Math.floor(GRID_COLS/2),cr=Math.floor(GRID_ROWS/2);
 
-    const components = [];
-    let nextId = 1;
-    const center = { col: Math.floor(GRID_COLS/2), row: Math.floor(GRID_ROWS/2) };
-
-    for (const compType of blueprint) {
-      for (let attempt=0; attempt<400; attempt++) {
-        const col = 2 + Math.floor(rng()*(GRID_COLS-4));
-        const row = 2 + Math.floor(rng()*(GRID_ROWS-4));
-        // Reserve a 5-cell radius around center for the player
-        if (Math.abs(col-center.col)<=5 && Math.abs(row-center.row)<=5) continue;
-        const cell = { state:STATE.COMPONENT, id:nextId, compType, owner:'world',
-                       pulse:rng()*Math.PI*2, speed:0.7+rng()*1.4 };
-        if (grid.writeIfEmpty(col,row,cell)) {
-          components.push({col,row,...cell});
-          nextId++;
-          break;
-        }
+    for(const compType of blueprint){
+      for(let attempt=0;attempt<400;attempt++){
+        const col=2+Math.floor(rng()*(GRID_COLS-4));
+        const row=2+Math.floor(rng()*(GRID_ROWS-4));
+        if(Math.abs(col-cc)<=5&&Math.abs(row-cr)<=5)continue;
+        const cell={state:STATE.COMPONENT,id:nextId,compType,owner:'world',pulse:rng()*Math.PI*2,speed:0.7+rng()*1.4};
+        if(grid.writeIfEmpty(col,row,cell)){components.push({col,row,...cell});nextId++;break;}
       }
     }
 
-    const linkSegments=[], linkCount={};
+    const linkSegments=[],linkCount={};
     components.forEach(c=>{linkCount[c.id]=0;});
 
-    for (const src of components) {
-      if (linkCount[src.id]>=3) continue;
-      const nearby = components
-        .filter(c=>c.id!==src.id)
-        .map(c=>({...c, dist:Math.abs(c.col-src.col)+Math.abs(c.row-src.row)}))
+    for(const src of components){
+      if(linkCount[src.id]>=3)continue;
+      const nearby=components.filter(c=>c.id!==src.id)
+        .map(c=>({...c,dist:Math.abs(c.col-src.col)+Math.abs(c.row-src.row)}))
         .sort((a,b)=>a.dist-b.dist);
+      for(const dst of nearby){
+        if(linkCount[src.id]>=3)break;
+        if(linkCount[dst.id]>=3)continue;
+        if(dst.dist>22)break;
+        if(linkSegments.some(s=>(s.fromId===src.id&&s.toId===dst.id)||(s.fromId===dst.id&&s.toId===src.id)))continue;
+        const seg=routeLink(grid,src,dst,rng()>0.5)??routeLink(grid,src,dst,rng()<=0.5);
+        if(!seg)continue;
+        const segIdx=linkSegments.length;
+        linkSegments.push({fromId:src.id,toId:dst.id,cells:seg,owner:'world'});
+        for(const{col,row}of seg)grid.writeIfEmpty(col,row,{state:STATE.LINK,owner:'world',fromId:src.id,toId:dst.id,segIdx});
+        linkCount[src.id]++;linkCount[dst.id]++;
+      }
+    }
+    return{grid,components,linkSegments};
+  }
 
-      for (const dst of nearby) {
-        if (linkCount[src.id]>=3) break;
-        if (linkCount[dst.id]>=3) continue;
-        if (dst.dist>22) break;
-        if (linkSegments.some(s=>(s.fromId===src.id&&s.toId===dst.id)||(s.fromId===dst.id&&s.toId===src.id))) continue;
+  // ── World state ─────────────────────────────────────────────────────────────
+  const world=generateWorld(0xDEADBEEF);
+  const grid=world.grid;
+  const components=world.components;
+  const linkSegments=world.linkSegments;
 
-        const seg = routeLink(grid,src,dst,rng()>0.5) ?? routeLink(grid,src,dst,rng()<=0.5);
-        if (!seg) continue;
+  // ── Animations array ─────────────────────────────────────────────────────────
+  // Each entry: {col, row, t0}   (expand ripple)
+  const animations=[];
 
-        const segIdx = linkSegments.length;
-        linkSegments.push({fromId:src.id, toId:dst.id, cells:seg, owner:'world'});
-        for (const {col,row} of seg) {
-          grid.writeIfEmpty(col,row,{state:STATE.LINK, owner:'world', fromId:src.id, toId:dst.id, segIdx});
+  // ── Player state ─────────────────────────────────────────────────────────────
+  const player={
+    col:0,row:0,
+    activeCol:0,activeRow:0,
+    energy:80,maxEnergy:100,energyRegen:5,
+    ownedCells:new Set(),
+    ownedComponents:[],
+    playerSegments:[],        // {fromId,toId,cells}
+    expandable:new Set(),
+
+    // ── Graph (nodes + edges) ─────────────────────────────────────────────────
+    graph:new Map(),          // Map<id, Set<id>>  adjacency list
+    nodeDepth:new Map(),      // Map<id, number>   BFS depth from CORE
+    connectedIds:new Set(),   // Set<id>           reachable from CORE via BFS
+    maxDepth:0,
+    bfsParent:new Map(),      // Map<id, id|null>  for path tracing
+    segByPair:new Map(),      // Map<"a,b", segIdx> both directions
+    pathHighlight:new Set(),  // Set<segIdx> currently highlighted path
+
+    nextId:10000,
+    expandCost:15,
+    flashMsg:'',flashTimer:0,
+    coreId:null,
+  };
+
+  // ── BFS connectivity from CORE_NODE ─────────────────────────────────────────
+  function recomputeConnectivity(){
+    const coreId=player.coreId;
+    player.connectedIds=new Set();
+    player.nodeDepth=new Map();
+    player.bfsParent=new Map();
+    player.maxDepth=0;
+    if(!coreId||!player.graph.has(coreId))return;
+
+    const queue=[coreId];
+    player.connectedIds.add(coreId);
+    player.nodeDepth.set(coreId,0);
+    player.bfsParent.set(coreId,null);
+
+    while(queue.length){
+      const id=queue.shift();
+      const depth=player.nodeDepth.get(id);
+      for(const nId of(player.graph.get(id)||[])){
+        if(!player.connectedIds.has(nId)){
+          player.connectedIds.add(nId);
+          player.nodeDepth.set(nId,depth+1);
+          player.bfsParent.set(nId,id);
+          if(depth+1>player.maxDepth)player.maxDepth=depth+1;
+          queue.push(nId);
         }
-        linkCount[src.id]++;
-        linkCount[dst.id]++;
       }
     }
 
-    return {grid, components, linkSegments, nextId};
+    // Mark components as connected/disconnected
+    player.ownedComponents.forEach(comp=>{
+      comp.connected=player.connectedIds.has(comp.id);
+    });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // WORLD + PLAYER STATE
-  // ─────────────────────────────────────────────────────────────────────────────
-  const world        = generateWorld(0xDEADBEEF);
-  const grid         = world.grid;
-  const components   = world.components;       // world components
-  const linkSegments = world.linkSegments;     // world links
+  // ── Highlight path from selected node back to CORE ──────────────────────────
+  function highlightPath(nodeId){
+    player.pathHighlight=new Set();
+    if(!nodeId||!player.bfsParent.has(nodeId))return;
+    let cur=nodeId;
+    while(player.bfsParent.get(cur)!==null&&player.bfsParent.get(cur)!==undefined){
+      const par=player.bfsParent.get(cur);
+      const key1=`${cur},${par}`,key2=`${par},${cur}`;
+      const idx=player.segByPair.get(key1)??player.segByPair.get(key2);
+      if(idx!==undefined)player.pathHighlight.add(idx);
+      cur=par;
+    }
+  }
 
-  // ── Player state ─────────────────────────────────────────────────────────────
-  const player = {
-    col: 0, row: 0,           // grid cell of CORE_NODE
-    activeCol: 0, activeRow: 0, // camera follow target
-    energy: 80, maxEnergy: 100, energyRegen: 5,
-    cpuCap: 1, ramCap: 2,
-    ownedCells: new Set(),    // Set<"col,row">
-    ownedComponents: [],      // [{col,row,...cell}]
-    playerSegments: [],       // [{fromId,toId,cells:[]}]
-    expandable: new Set(),    // EMPTY cells adjacent to owned — visual hints
-    nextId: 10000,
-    expandCost: 15,
-    flashMsg: '', flashTimer: 0,
-  };
-
-  // Place player at nearest EMPTY cell to grid center
-  (function placePlayer() {
-    const cc = Math.floor(GRID_COLS/2), cr = Math.floor(GRID_ROWS/2);
-    for (let radius=0; radius<=20; radius++) {
-      for (let dc=-radius; dc<=radius; dc++) {
-        for (let dr=-radius; dr<=radius; dr++) {
-          if (Math.abs(dc)+Math.abs(dr)!==radius) continue;
-          const c=cc+dc, r=cr+dr;
-          if (!grid.inBounds(c,r)) continue;
-          const cell = { state:STATE.COMPONENT, id:player.nextId++,
-                         compType:COMP.CORE_NODE, owner:'player',
-                         pulse:0, speed:1.8 };
-          if (grid.writeIfEmpty(c,r,cell)) {
-            player.col=c; player.row=r;
-            player.activeCol=c; player.activeRow=r;
+  // ── Place player at center ───────────────────────────────────────────────────
+  (function placePlayer(){
+    const cc=Math.floor(GRID_COLS/2),cr=Math.floor(GRID_ROWS/2);
+    for(let radius=0;radius<=20;radius++){
+      for(let dc=-radius;dc<=radius;dc++){
+        for(let dr=-radius;dr<=radius;dr++){
+          if(Math.abs(dc)+Math.abs(dr)!==radius)continue;
+          const c=cc+dc,r=cr+dr;
+          if(!grid.inBounds(c,r))continue;
+          const id=player.nextId++;
+          const cell={state:STATE.COMPONENT,id,compType:COMP.CORE_NODE,owner:'player',pulse:0,speed:1.8,connected:true};
+          if(grid.writeIfEmpty(c,r,cell)){
+            player.col=c;player.row=r;
+            player.activeCol=c;player.activeRow=r;
+            player.coreId=id;
             player.ownedCells.add(`${c},${r}`);
             player.ownedComponents.push({col:c,row:r,...cell});
+            player.graph.set(id,new Set());
+            recomputeConnectivity();
             recomputeExpandable();
             return;
           }
@@ -335,648 +305,640 @@
     }
   })();
 
-  function recomputeExpandable() {
-    player.expandable = new Set();
-    for (const key of player.ownedCells) {
-      const [c,r] = key.split(',').map(Number);
-      for (const [dc,dr] of [[-1,0],[1,0],[0,-1],[0,1]]) {
-        const nc=c+dc, nr=r+dr;
-        if (grid.isEmpty(nc,nr)) player.expandable.add(`${nc},${nr}`);
+  function recomputeExpandable(){
+    player.expandable=new Set();
+    for(const key of player.ownedCells){
+      const[c,r]=key.split(',').map(Number);
+      for(const[dc,dr]of[[-1,0],[1,0],[0,-1],[0,1]]){
+        const nc=c+dc,nr=r+dr;
+        if(grid.isEmpty(nc,nr))player.expandable.add(`${nc},${nr}`);
       }
     }
   }
 
-  function showFlash(msg) {
-    player.flashMsg = msg;
-    player.flashTimer = 1.8; // seconds
-    document.getElementById('hud-msg').textContent = msg;
+  function showFlash(msg){
+    player.flashMsg=msg;player.flashTimer=1.8;
+    document.getElementById('hud-msg').textContent=msg;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // EXPANSION LOGIC
-  // ─────────────────────────────────────────────────────────────────────────────
-  function tryExpand(col, row) {
-    if (!grid.inBounds(col,row) || !grid.isEmpty(col,row)) return;
+  // ── Expansion ────────────────────────────────────────────────────────────────
+  function tryExpand(col,row){
+    if(!grid.inBounds(col,row)||!grid.isEmpty(col,row))return;
+    if(player.energy<player.expandCost){showFlash('INSUFFICIENT ENERGY');return;}
 
-    if (player.energy < player.expandCost) {
-      showFlash('INSUFFICIENT ENERGY');
-      return;
+    const candidates=[...player.ownedComponents]
+      .map(c=>({...c,dist:Math.abs(c.col-col)+Math.abs(c.row-row)}))
+      .sort((a,b)=>a.dist-b.dist).slice(0,6);
+
+    if(!candidates.length||candidates[0].dist>18){showFlash('OUT OF RANGE');return;}
+
+    let seg=null,srcComp=null;
+    for(const src of candidates){
+      seg=routeLink(grid,src,{col,row},true)??routeLink(grid,src,{col,row},false);
+      if(seg){srcComp=src;break;}
+    }
+    if(!seg){showFlash('PATH BLOCKED');return;}
+
+    const newId=player.nextId++;
+    const segIdx=player.playerSegments.length;
+
+    // Register edge in graph (both directions)
+    if(!player.graph.has(srcComp.id))player.graph.set(srcComp.id,new Set());
+    player.graph.set(newId,new Set());
+    player.graph.get(srcComp.id).add(newId);
+    player.graph.get(newId).add(srcComp.id);
+
+    // Register segment for path lookup (both key directions)
+    player.segByPair.set(`${srcComp.id},${newId}`,segIdx);
+    player.segByPair.set(`${newId},${srcComp.id}`,segIdx);
+
+    player.playerSegments.push({fromId:srcComp.id,toId:newId,cells:seg});
+
+    for(const{col:lc,row:lr}of seg){
+      grid.writeIfEmpty(lc,lr,{state:STATE.LINK,owner:'player',fromId:srcComp.id,toId:newId,segIdx});
     }
 
-    // Find closest owned component that can route a path to target
-    const candidates = [...player.ownedComponents]
-      .map(c => ({...c, dist: Math.abs(c.col-col)+Math.abs(c.row-row)}))
-      .sort((a,b) => a.dist-b.dist)
-      .slice(0,6);
-
-    if (!candidates.length || candidates[0].dist > 18) {
-      showFlash('OUT OF RANGE');
-      return;
-    }
-
-    let seg=null, srcComp=null;
-    for (const src of candidates) {
-      seg = routeLink(grid,src,{col,row},true) ?? routeLink(grid,src,{col,row},false);
-      if (seg) { srcComp=src; break; }
-    }
-
-    if (!seg) {
-      showFlash('PATH BLOCKED');
-      return;
-    }
-
-    // Place link cells
-    const newId  = player.nextId++;
-    const segIdx = player.playerSegments.length;
-    player.playerSegments.push({fromId:srcComp.id, toId:newId, cells:seg});
-
-    for (const {col:lc,row:lr} of seg) {
-      grid.writeIfEmpty(lc,lr,{
-        state:STATE.LINK, owner:'player',
-        fromId:srcComp.id, toId:newId, segIdx,
-      });
-    }
-
-    // Place new component
-    const newCell = {
-      state:STATE.COMPONENT, id:newId,
-      compType:COMP.PLAYER_NODE, owner:'player',
-      pulse:Math.random()*Math.PI*2, speed:1.1+Math.random()*0.5,
-    };
+    const newCell={state:STATE.COMPONENT,id:newId,compType:COMP.PLAYER_NODE,owner:'player',
+                   pulse:Math.random()*Math.PI*2,speed:1.1+Math.random()*0.5,connected:true};
     grid.writeIfEmpty(col,row,newCell);
     player.ownedComponents.push({col,row,...newCell});
     player.ownedCells.add(`${col},${row}`);
 
-    player.energy = Math.max(0, player.energy - player.expandCost);
-    player.activeCol = col;
-    player.activeRow = row;
-    player.flashMsg  = '';
-    document.getElementById('hud-msg').textContent = '';
+    player.energy=Math.max(0,player.energy-player.expandCost);
+    player.activeCol=col;player.activeRow=row;
+    player.flashMsg='';
+    document.getElementById('hud-msg').textContent='';
 
+    // Update graph + connectivity + expandable
+    recomputeConnectivity();
     recomputeExpandable();
+
+    // Expansion animation
+    animations.push({col,row,t0:null}); // t0 set on first draw
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // CANVAS + CAMERA
-  // ─────────────────────────────────────────────────────────────────────────────
-  const canvas = document.getElementById('c');
-  const ctx    = canvas.getContext('2d');
-  const mmCvs  = document.getElementById('minimap');
-  const mmCtx  = mmCvs.getContext('2d');
+  // ── Canvas / camera ──────────────────────────────────────────────────────────
+  const canvas=document.getElementById('c');
+  const ctx=canvas.getContext('2d');
+  const mmCvs=document.getElementById('minimap');
+  const mmCtx=mmCvs.getContext('2d');
 
-  function resize() { canvas.width=window.innerWidth; canvas.height=window.innerHeight; }
-  resize();
-  window.addEventListener('resize', resize);
+  function resize(){canvas.width=window.innerWidth;canvas.height=window.innerHeight;}
+  resize();window.addEventListener('resize',resize);
 
-  let camX = player.col*CS + CS/2;
-  let camY = player.row*CS + CS/2;
-  let zoom = 1.2;
+  let camX=player.col*CS+CS/2,camY=player.row*CS+CS/2,zoom=1.2;
 
-  function clampCam() {
-    const hw=(canvas.width/2)/zoom, hh=(canvas.height/2)/zoom;
-    camX = Math.max(hw, Math.min(WORLD_W-hw, camX));
-    camY = Math.max(hh, Math.min(WORLD_H-hh, camY));
+  function clampCam(){
+    const hw=(canvas.width/2)/zoom,hh=(canvas.height/2)/zoom;
+    camX=Math.max(hw,Math.min(WORLD_W-hw,camX));
+    camY=Math.max(hh,Math.min(WORLD_H-hh,camY));
+  }
+  function screenToWorld(sx,sy){return[(sx-canvas.width/2)/zoom+camX,(sy-canvas.height/2)/zoom+camY];}
+  function viewBounds(){
+    const hw=(canvas.width/2)/zoom,hh=(canvas.height/2)/zoom;
+    return{l:camX-hw,r:camX+hw,t:camY-hh,b:camY+hh};
   }
 
-  function screenToWorld(sx,sy) {
-    return [(sx-canvas.width/2)/zoom+camX, (sy-canvas.height/2)/zoom+camY];
-  }
+  let followEnabled=true,followCooldown=0;
 
-  function viewBounds() {
-    const hw=(canvas.width/2)/zoom, hh=(canvas.height/2)/zoom;
-    return {l:camX-hw, r:camX+hw, t:camY-hh, b:camY+hh};
-  }
+  // ── Input ────────────────────────────────────────────────────────────────────
+  const keys={};
+  window.addEventListener('keydown',e=>{keys[e.code]=true;});
+  window.addEventListener('keyup',  e=>{keys[e.code]=false;});
 
-  // Camera follow state
-  let followEnabled  = true;
-  let followCooldown = 0;
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // INPUT
-  // ─────────────────────────────────────────────────────────────────────────────
-  const keys = {};
-  window.addEventListener('keydown', e => { keys[e.code]=true; });
-  window.addEventListener('keyup',   e => { keys[e.code]=false; });
-
-  let dragging=false, didDrag=false;
-  let dragSX=0, dragSY=0, dragCX=0, dragCY=0;
-
-  canvas.addEventListener('mousedown', e => {
-    dragging=true; didDrag=false;
-    dragSX=e.clientX; dragSY=e.clientY;
-    dragCX=camX; dragCY=camY;
+  let dragging=false,didDrag=false,dragSX=0,dragSY=0,dragCX=0,dragCY=0;
+  canvas.addEventListener('mousedown',e=>{dragging=true;didDrag=false;dragSX=e.clientX;dragSY=e.clientY;dragCX=camX;dragCY=camY;});
+  window.addEventListener('mousemove',e=>{
+    if(!dragging)return;
+    const dx=(e.clientX-dragSX)/zoom,dy=(e.clientY-dragSY)/zoom;
+    if(Math.abs(dx)+Math.abs(dy)>3){didDrag=true;camX=dragCX-dx;camY=dragCY-dy;followEnabled=false;followCooldown=3;clampCam();}
   });
-  window.addEventListener('mousemove', e => {
-    if(!dragging) return;
-    const dx=(e.clientX-dragSX)/zoom, dy=(e.clientY-dragSY)/zoom;
-    if(Math.abs(dx)+Math.abs(dy)>3) {
-      didDrag=true;
-      camX=dragCX-dx; camY=dragCY-dy;
-      followEnabled=false; followCooldown=3.0;
-      clampCam();
-    }
-  });
-  window.addEventListener('mouseup', e => {
-    if (!didDrag) handleClick(e.clientX, e.clientY);
-    dragging=false;
-  });
+  window.addEventListener('mouseup',e=>{if(!didDrag)handleClick(e.clientX,e.clientY);dragging=false;});
 
-  canvas.addEventListener('wheel', e => {
+  canvas.addEventListener('wheel',e=>{
     e.preventDefault();
-    const factor = e.deltaY>0 ? 0.9 : 1.1;
-    const [wx,wy] = screenToWorld(e.clientX, e.clientY);
-    zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom*factor));
-    camX = wx-(e.clientX-canvas.width/2)/zoom;
-    camY = wy-(e.clientY-canvas.height/2)/zoom;
-    clampCam();
-  }, {passive:false});
+    const f=e.deltaY>0?0.9:1.1,[wx,wy]=screenToWorld(e.clientX,e.clientY);
+    zoom=Math.max(ZOOM_MIN,Math.min(ZOOM_MAX,zoom*f));
+    camX=wx-(e.clientX-canvas.width/2)/zoom;camY=wy-(e.clientY-canvas.height/2)/zoom;clampCam();
+  },{passive:false});
 
-  // Touch
-  let touches={}, lastPinch=0;
-  canvas.addEventListener('touchstart', e => {
+  let touches={},lastPinch=0;
+  canvas.addEventListener('touchstart',e=>{
     e.preventDefault();
     Array.from(e.changedTouches).forEach(t=>{touches[t.identifier]={x:t.clientX,y:t.clientY};});
     const ids=Object.keys(touches);
     if(ids.length===1){dragging=true;didDrag=false;dragSX=touches[ids[0]].x;dragSY=touches[ids[0]].y;dragCX=camX;dragCY=camY;}
     lastPinch=0;
   },{passive:false});
-  canvas.addEventListener('touchmove', e => {
+  canvas.addEventListener('touchmove',e=>{
     e.preventDefault();
     Array.from(e.changedTouches).forEach(t=>{touches[t.identifier]={x:t.clientX,y:t.clientY};});
     const vals=Object.values(touches);
-    if(vals.length>=2) {
+    if(vals.length>=2){
       dragging=false;
-      const dx=vals[0].x-vals[1].x, dy=vals[0].y-vals[1].y;
-      const dist=Math.sqrt(dx*dx+dy*dy);
+      const dx=vals[0].x-vals[1].x,dy=vals[0].y-vals[1].y,dist=Math.sqrt(dx*dx+dy*dy);
       if(lastPinch>0){
-        const f=dist/lastPinch, mx=(vals[0].x+vals[1].x)/2, my=(vals[0].y+vals[1].y)/2;
-        const [wx,wy]=screenToWorld(mx,my);
+        const f=dist/lastPinch,mx=(vals[0].x+vals[1].x)/2,my=(vals[0].y+vals[1].y)/2;
+        const[wx,wy]=screenToWorld(mx,my);
         zoom=Math.max(ZOOM_MIN,Math.min(ZOOM_MAX,zoom*f));
-        camX=wx-(mx-canvas.width/2)/zoom; camY=wy-(my-canvas.height/2)/zoom;
-        clampCam();
+        camX=wx-(mx-canvas.width/2)/zoom;camY=wy-(my-canvas.height/2)/zoom;clampCam();
       }
       lastPinch=dist;
-    } else if(vals.length===1&&dragging) {
-      const dx=(vals[0].x-dragSX)/zoom, dy=(vals[0].y-dragSY)/zoom;
-      if(Math.abs(dx)+Math.abs(dy)>3){
-        didDrag=true; camX=dragCX-dx; camY=dragCY-dy;
-        followEnabled=false; followCooldown=3.0;
-        clampCam();
-      }
+    }else if(vals.length===1&&dragging){
+      const dx=(vals[0].x-dragSX)/zoom,dy=(vals[0].y-dragSY)/zoom;
+      if(Math.abs(dx)+Math.abs(dy)>3){didDrag=true;camX=dragCX-dx;camY=dragCY-dy;followEnabled=false;followCooldown=3;clampCam();}
     }
   },{passive:false});
-  canvas.addEventListener('touchend', e => {
+  canvas.addEventListener('touchend',e=>{
     e.preventDefault();
     Array.from(e.changedTouches).forEach(t=>{delete touches[t.identifier];});
     lastPinch=0;
-    if(!didDrag&&e.changedTouches.length===1) handleClick(e.changedTouches[0].clientX,e.changedTouches[0].clientY);
+    if(!didDrag&&e.changedTouches.length===1)handleClick(e.changedTouches[0].clientX,e.changedTouches[0].clientY);
     dragging=false;
   },{passive:false});
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // CLICK HANDLER
-  // ─────────────────────────────────────────────────────────────────────────────
-  let selectedCell = null;
+  // ── Click handler ────────────────────────────────────────────────────────────
+  let selectedCell=null;
 
-  function handleClick(sx, sy) {
-    const [wx,wy] = screenToWorld(sx,sy);
-    const col = Math.floor(wx/CS), row = Math.floor(wy/CS);
-    const cell = grid.get(col,row);
-    if (!cell) return;
+  function handleClick(sx,sy){
+    const[wx,wy]=screenToWorld(sx,sy);
+    const col=Math.floor(wx/CS),row=Math.floor(wy/CS);
+    const cell=grid.get(col,row);
+    if(!cell)return;
 
-    if (cell.state===STATE.EMPTY) {
-      tryExpand(col,row);
-      return;
-    }
+    if(cell.state===STATE.EMPTY){tryExpand(col,row);return;}
 
-    if (cell.owner==='player' && cell.state===STATE.COMPONENT) {
-      // Move active position — re-enable camera follow
-      player.activeCol=col; player.activeRow=row;
+    if(cell.owner==='player'&&cell.state===STATE.COMPONENT){
+      player.activeCol=col;player.activeRow=row;
       followEnabled=true;
       selectedCell={col,row,cell};
-      updateCellHUD();
+      highlightPath(cell.id);
+      updateCellHUD(col,row,cell);
       return;
     }
 
-    selectedCell = {col,row,cell};
-    updateCellHUD();
+    player.pathHighlight=new Set();
+    selectedCell={col,row,cell};
+    updateCellHUD(col,row,cell);
   }
 
-  function updateCellHUD() {
-    const el = document.getElementById('hud-cell');
-    if (!selectedCell) { el.innerHTML=''; return; }
-    const {col,row,cell}=selectedCell;
-    if (cell.state===STATE.COMPONENT) {
-      const owner = cell.owner==='player' ? '<b>PLAYER</b>' : '<b>WORLD</b>';
-      el.innerHTML=`STATE: <b>COMPONENT</b>  ${owner}<br>TYPE: <b>${cell.compType}</b><br>CELL: <b>${col},${row}</b>`;
-    } else {
-      const owner = cell.owner==='player' ? '<b>PLAYER</b>' : '<b>WORLD</b>';
-      el.innerHTML=`STATE: <b>LINK</b>  ${owner}<br>FROM: <b>#${cell.fromId}</b> → <b>#${cell.toId}</b><br>CELL: <b>${col},${row}</b>`;
+  function updateCellHUD(col,row,cell){
+    const el=document.getElementById('hud-cell');
+    const ph=document.getElementById('hud-path');
+    if(!cell){el.innerHTML='';ph.textContent='';return;}
+    if(cell.state===STATE.COMPONENT){
+      const own=cell.owner==='player'?'<b>PLAYER</b>':'<b>WORLD</b>';
+      const conn=cell.owner==='player'?(cell.connected?'<b style="color:#00ff88">ONLINE</b>':'<b style="color:#ff4444">OFFLINE</b>'):'';
+      el.innerHTML=`STATE: <b>COMPONENT</b> ${own} ${conn}<br>TYPE: <b>${cell.compType}</b>  CELL: <b>${col},${row}</b>`;
+      if(cell.owner==='player'){
+        const depth=player.nodeDepth.get(cell.id)??'?';
+        ph.textContent=`DEPTH: ${depth} hops from CORE`;
+      }else ph.textContent='';
+    }else{
+      const own=cell.owner==='player'?'<b>PLAYER</b>':'<b>WORLD</b>';
+      el.innerHTML=`STATE: <b>LINK</b> ${own}<br>FROM: <b>#${cell.fromId}</b> → <b>#${cell.toId}</b>  CELL: <b>${col},${row}</b>`;
+      ph.textContent='';
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // DRAW — link cell
-  // ─────────────────────────────────────────────────────────────────────────────
-  function linkConnects(c,r) {
+  // ── Draw: link cell ──────────────────────────────────────────────────────────
+  function linkConnects(c,r){
     const cell=grid.get(c,r);
-    return cell!==null && (cell.state===STATE.LINK||cell.state===STATE.COMPONENT);
+    return cell!==null&&(cell.state===STATE.LINK||cell.state===STATE.COMPONENT);
   }
 
-  function drawLinkCell(c,r) {
-    const cell    = grid.get(c,r);
-    const isP     = cell && cell.owner==='player';
-    const coreClr = isP ? PAL.plinkCore : PAL.linkCore;
-    const glowClr = isP ? PAL.plinkGlow : PAL.linkGlow;
-    const cx      = c*CS+CS/2, cy=r*CS+CS/2;
-    const connH   = linkConnects(c-1,r)||linkConnects(c+1,r);
-    const connV   = linkConnects(c,r-1)||linkConnects(c,r+1);
+  function drawLinkCell(c,r){
+    const cell=grid.get(c,r);
+    const isP=cell&&cell.owner==='player';
+
+    // Determine connectivity and highlight state
+    const connected=!isP||(player.connectedIds.has(cell.fromId)&&player.connectedIds.has(cell.toId));
+    const inPath=isP&&player.pathHighlight.has(cell.segIdx??-1);
+
+    let coreClr,glowClr,lineW,glowA;
+    if(!isP){
+      coreClr=PAL.linkCore;glowClr=PAL.linkGlow;lineW=2;glowA=0.11;
+    }else if(!connected){
+      coreClr=PAL.plinkDim;glowClr=PAL.plinkDimGlow;lineW=1;glowA=0.04;
+    }else if(inPath){
+      coreClr='#ffdd88';glowClr='#ffee99';lineW=3;glowA=0.25;
+    }else{
+      coreClr=PAL.plinkCore;glowClr=PAL.plinkGlow;lineW=2.5;glowA=0.14;
+    }
+
+    const cx=c*CS+CS/2,cy=r*CS+CS/2;
+    const connH=linkConnects(c-1,r)||linkConnects(c+1,r);
+    const connV=linkConnects(c,r-1)||linkConnects(c,r+1);
 
     ctx.lineCap='round';
-    if (connH) {
-      ctx.strokeStyle=hexAlpha(glowClr,0.14); ctx.lineWidth=8;
-      ctx.beginPath(); ctx.moveTo(cx-CS/2,cy); ctx.lineTo(cx+CS/2,cy); ctx.stroke();
-      ctx.strokeStyle=coreClr; ctx.lineWidth=isP?2.5:2;
-      ctx.beginPath(); ctx.moveTo(cx-CS/2,cy); ctx.lineTo(cx+CS/2,cy); ctx.stroke();
+    if(connH){
+      ctx.strokeStyle=hexAlpha(glowClr,glowA);ctx.lineWidth=8;
+      ctx.beginPath();ctx.moveTo(cx-CS/2,cy);ctx.lineTo(cx+CS/2,cy);ctx.stroke();
+      ctx.strokeStyle=coreClr;ctx.lineWidth=lineW;
+      ctx.beginPath();ctx.moveTo(cx-CS/2,cy);ctx.lineTo(cx+CS/2,cy);ctx.stroke();
     }
-    if (connV) {
-      ctx.strokeStyle=hexAlpha(glowClr,0.14); ctx.lineWidth=8;
-      ctx.beginPath(); ctx.moveTo(cx,cy-CS/2); ctx.lineTo(cx,cy+CS/2); ctx.stroke();
-      ctx.strokeStyle=coreClr; ctx.lineWidth=isP?2.5:2;
-      ctx.beginPath(); ctx.moveTo(cx,cy-CS/2); ctx.lineTo(cx,cy+CS/2); ctx.stroke();
+    if(connV){
+      ctx.strokeStyle=hexAlpha(glowClr,glowA);ctx.lineWidth=8;
+      ctx.beginPath();ctx.moveTo(cx,cy-CS/2);ctx.lineTo(cx,cy+CS/2);ctx.stroke();
+      ctx.strokeStyle=coreClr;ctx.lineWidth=lineW;
+      ctx.beginPath();ctx.moveTo(cx,cy-CS/2);ctx.lineTo(cx,cy+CS/2);ctx.stroke();
     }
-    if (connH&&connV) {
+    if(connH&&connV){
       ctx.fillStyle=glowClr;
-      ctx.beginPath(); ctx.arc(cx,cy,3,0,Math.PI*2); ctx.fill();
+      ctx.beginPath();ctx.arc(cx,cy,3,0,Math.PI*2);ctx.fill();
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // DRAW — world component
-  // ─────────────────────────────────────────────────────────────────────────────
-  function drawComponent(comp, t) {
-    if (comp.compType===COMP.CORE_NODE)   { drawCoreNode(comp,t); return; }
-    if (comp.compType===COMP.PLAYER_NODE) { drawPlayerNode(comp,t); return; }
+  // ── Draw: world component ────────────────────────────────────────────────────
+  function drawComponent(comp,t){
+    if(comp.compType===COMP.CORE_NODE)  {drawCoreNode(comp,t);return;}
+    if(comp.compType===COMP.PLAYER_NODE){drawPlayerNode(comp,t);return;}
 
-    const px=comp.col*CS, py=comp.row*CS, cx=px+CS/2, cy=py+CS/2;
+    const px=comp.col*CS,py=comp.row*CS,cx=px+CS/2,cy=py+CS/2;
     const pal=PAL[comp.compType];
-
-    ctx.fillStyle=hexAlpha(pal.glow,0.06); ctx.fillRect(px-5,py-5,CS+10,CS+10);
-    ctx.fillStyle=pal.fill; ctx.fillRect(px+2,py+2,CS-4,CS-4);
-    ctx.strokeStyle=pal.border; ctx.lineWidth=2; ctx.strokeRect(px+2,py+2,CS-4,CS-4);
-    ctx.strokeStyle=hexAlpha(pal.glow,0.4); ctx.lineWidth=1; ctx.strokeRect(px+7,py+7,CS-14,CS-14);
-
+    ctx.fillStyle=hexAlpha(pal.glow,0.06);ctx.fillRect(px-5,py-5,CS+10,CS+10);
+    ctx.fillStyle=pal.fill;ctx.fillRect(px+2,py+2,CS-4,CS-4);
+    ctx.strokeStyle=pal.border;ctx.lineWidth=2;ctx.strokeRect(px+2,py+2,CS-4,CS-4);
+    ctx.strokeStyle=hexAlpha(pal.glow,0.4);ctx.lineWidth=1;ctx.strokeRect(px+7,py+7,CS-14,CS-14);
     const dr=7;
-    ctx.strokeStyle=hexAlpha(pal.glow,0.8); ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(cx,cy-dr); ctx.lineTo(cx+dr,cy); ctx.lineTo(cx,cy+dr); ctx.lineTo(cx-dr,cy); ctx.closePath(); ctx.stroke();
-    ctx.fillStyle=pal.glow; ctx.beginPath(); ctx.arc(cx,cy,2.5,0,Math.PI*2); ctx.fill();
-
-    // Pin stubs
+    ctx.strokeStyle=hexAlpha(pal.glow,0.8);ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(cx,cy-dr);ctx.lineTo(cx+dr,cy);ctx.lineTo(cx,cy+dr);ctx.lineTo(cx-dr,cy);ctx.closePath();ctx.stroke();
+    ctx.fillStyle=pal.glow;ctx.beginPath();ctx.arc(cx,cy,2.5,0,Math.PI*2);ctx.fill();
     const sides=[{dc:-1,dr:0,ax:px,ay:cy,bx:px+5,by:cy},{dc:1,dr:0,ax:px+CS-5,ay:cy,bx:px+CS,by:cy},
                  {dc:0,dr:-1,ax:cx,ay:py,bx:cx,by:py+5},{dc:0,dr:1,ax:cx,ay:py+CS-5,bx:cx,by:py+CS}];
-    ctx.strokeStyle=hexAlpha(pal.border,0.65); ctx.lineWidth=2;
+    ctx.strokeStyle=hexAlpha(pal.border,0.65);ctx.lineWidth=2;
     sides.forEach(s=>{const nc=grid.get(comp.col+s.dc,comp.row+s.dr);if(nc&&nc.state===STATE.LINK){ctx.beginPath();ctx.moveTo(s.ax,s.ay);ctx.lineTo(s.bx,s.by);ctx.stroke();}});
-
-    ctx.fillStyle=pal.dot; ctx.font='bold 9px Courier New'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.shadowColor=pal.glow; ctx.shadowBlur=5;
-    ctx.fillText(COMP_SHORT[comp.compType],cx,cy);
-    ctx.shadowBlur=0;
+    ctx.fillStyle=pal.dot;ctx.font='bold 9px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowColor=pal.glow;ctx.shadowBlur=5;ctx.fillText(COMP_SHORT[comp.compType],cx,cy);ctx.shadowBlur=0;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // DRAW — player expansion node
-  // ─────────────────────────────────────────────────────────────────────────────
-  function drawPlayerNode(comp, t) {
-    const px=comp.col*CS, py=comp.row*CS, cx=px+CS/2, cy=py+CS/2;
+  // ── Draw: player node (with connected/disconnected states) ───────────────────
+  function drawPlayerNode(comp,t){
+    const px=comp.col*CS,py=comp.row*CS,cx=px+CS/2,cy=py+CS/2;
+    const isSelected=selectedCell&&selectedCell.col===comp.col&&selectedCell.row===comp.row;
+
+    if(!comp.connected){
+      // Disconnected: dark gray body, red "LOST" indicator
+      ctx.fillStyle='rgba(40,20,50,0.9)';ctx.fillRect(px+2,py+2,CS-4,CS-4);
+      ctx.strokeStyle='#442233';ctx.lineWidth=1;
+      ctx.setLineDash([4,4]);ctx.strokeRect(px+2,py+2,CS-4,CS-4);ctx.setLineDash([]);
+      ctx.fillStyle='#ff2244';ctx.font='bold 8px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText('LOST',cx,cy);
+      return;
+    }
+
     const pal=PAL[COMP.PLAYER_NODE];
+    // Depth-based brightness: deeper nodes slightly dimmer
+    const depth=player.nodeDepth.get(comp.id)??0;
+    const dimF=Math.max(0.55,1-depth*0.08);
 
-    ctx.fillStyle=hexAlpha(pal.glow,0.07); ctx.fillRect(px-4,py-4,CS+8,CS+8);
-    ctx.fillStyle=pal.fill; ctx.fillRect(px+2,py+2,CS-4,CS-4);
-    ctx.strokeStyle=pal.border; ctx.lineWidth=2; ctx.strokeRect(px+2,py+2,CS-4,CS-4);
+    ctx.fillStyle=hexAlpha(pal.glow,0.06*dimF);ctx.fillRect(px-4,py-4,CS+8,CS+8);
+    ctx.fillStyle=pal.fill;ctx.fillRect(px+2,py+2,CS-4,CS-4);
+    ctx.strokeStyle=isSelected?'#ffdd88':pal.border;ctx.lineWidth=isSelected?2.5:2;
+    ctx.strokeRect(px+2,py+2,CS-4,CS-4);
 
-    // Diagonal cross inside
-    ctx.strokeStyle=hexAlpha(pal.glow,0.6); ctx.lineWidth=1;
+    // Diagonal cross
+    ctx.strokeStyle=hexAlpha(pal.glow,0.55*dimF);ctx.lineWidth=1;
     ctx.beginPath();
-    ctx.moveTo(px+8,py+8); ctx.lineTo(px+CS-8,py+CS-8);
-    ctx.moveTo(px+CS-8,py+8); ctx.lineTo(px+8,py+CS-8);
+    ctx.moveTo(px+8,py+8);ctx.lineTo(px+CS-8,py+CS-8);
+    ctx.moveTo(px+CS-8,py+8);ctx.lineTo(px+8,py+CS-8);
     ctx.stroke();
 
-    ctx.fillStyle=pal.glow; ctx.beginPath(); ctx.arc(cx,cy,3,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=hexAlpha(pal.glow,dimF);ctx.beginPath();ctx.arc(cx,cy,3,0,Math.PI*2);ctx.fill();
 
-    // Pin stubs
     const sides=[{dc:-1,dr:0,ax:px,ay:cy,bx:px+4,by:cy},{dc:1,dr:0,ax:px+CS-4,ay:cy,bx:px+CS,by:cy},
                  {dc:0,dr:-1,ax:cx,ay:py,bx:cx,by:py+4},{dc:0,dr:1,ax:cx,ay:py+CS-4,bx:cx,by:py+CS}];
-    ctx.strokeStyle=hexAlpha(pal.border,0.7); ctx.lineWidth=2;
+    ctx.strokeStyle=hexAlpha(pal.border,0.65);ctx.lineWidth=2;
     sides.forEach(s=>{const nc=grid.get(comp.col+s.dc,comp.row+s.dr);if(nc&&nc.state===STATE.LINK){ctx.beginPath();ctx.moveTo(s.ax,s.ay);ctx.lineTo(s.bx,s.by);ctx.stroke();}});
 
-    ctx.fillStyle=pal.dot; ctx.font='bold 9px Courier New'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.shadowColor=pal.glow; ctx.shadowBlur=5;
-    ctx.fillText('NODE',cx,cy);
-    ctx.shadowBlur=0;
+    ctx.fillStyle=hexAlpha(pal.dot,dimF);ctx.font='bold 9px Courier New';
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowColor=pal.glow;ctx.shadowBlur=4*dimF;
+    ctx.fillText('NODE',cx,cy);ctx.shadowBlur=0;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // DRAW — player CORE_NODE (hexagonal, unique)
-  // ─────────────────────────────────────────────────────────────────────────────
-  function hexPath(ctx, cx, cy, r) {
+  // ── Draw: CORE_NODE (hexagonal) ──────────────────────────────────────────────
+  function hexPath(ctx,cx,cy,r){
     ctx.beginPath();
-    for (let i=0; i<6; i++) {
-      const a=(Math.PI/3)*i-Math.PI/6;
-      const x=cx+r*Math.cos(a), y=cy+r*Math.sin(a);
-      i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
-    }
+    for(let i=0;i<6;i++){const a=(Math.PI/3)*i-Math.PI/6;const x=cx+r*Math.cos(a),y=cy+r*Math.sin(a);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);}
     ctx.closePath();
   }
 
-  function drawCoreNode(comp, t) {
-    const px=comp.col*CS, py=comp.row*CS, cx=px+CS/2, cy=py+CS/2;
+  function drawCoreNode(comp,t){
+    const px=comp.col*CS,py=comp.row*CS,cx=px+CS/2,cy=py+CS/2;
     const pal=PAL[COMP.CORE_NODE];
     const pulse=0.5+0.5*Math.sin(t*comp.speed+comp.pulse);
 
-    // Strong outer glow
-    ctx.fillStyle=hexAlpha(pal.glow,0.05+0.08*pulse);
-    ctx.fillRect(px-10,py-10,CS+20,CS+20);
+    ctx.fillStyle=hexAlpha(pal.glow,0.05+0.1*pulse);ctx.fillRect(px-10,py-10,CS+20,CS+20);
+    hexPath(ctx,cx,cy,CS/2-4);ctx.fillStyle=pal.fill;ctx.fill();
+    ctx.strokeStyle=pal.border;ctx.lineWidth=2;ctx.stroke();
+    hexPath(ctx,cx,cy,CS/4);ctx.strokeStyle=hexAlpha(pal.glow,0.5+0.4*pulse);ctx.lineWidth=1;ctx.stroke();
 
-    // Hex body
-    hexPath(ctx,cx,cy,CS/2-4);
-    ctx.fillStyle=pal.fill; ctx.fill();
-    ctx.strokeStyle=pal.border; ctx.lineWidth=2; ctx.stroke();
-
-    // Inner hex (rotating feel via pulse)
-    hexPath(ctx,cx,cy,CS/4);
-    ctx.strokeStyle=hexAlpha(pal.glow,0.5+0.4*pulse); ctx.lineWidth=1; ctx.stroke();
-
-    // Center dot (pulsing)
     const r=3+pulse*3;
-    ctx.fillStyle=pal.glow; ctx.shadowColor=pal.glow; ctx.shadowBlur=10+pulse*8;
-    ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
-    ctx.shadowBlur=0;
+    ctx.fillStyle=pal.glow;ctx.shadowColor=pal.glow;ctx.shadowBlur=10+pulse*8;
+    ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
 
-    // Pin stubs
     const sides=[{dc:-1,dr:0,ax:px,ay:cy,bx:px+4,by:cy},{dc:1,dr:0,ax:px+CS-4,ay:cy,bx:px+CS,by:cy},
                  {dc:0,dr:-1,ax:cx,ay:py,bx:cx,by:py+4},{dc:0,dr:1,ax:cx,ay:py+CS-4,bx:cx,by:py+CS}];
-    ctx.strokeStyle=hexAlpha(pal.border,0.7); ctx.lineWidth=2;
+    ctx.strokeStyle=hexAlpha(pal.border,0.7);ctx.lineWidth=2;
     sides.forEach(s=>{const nc=grid.get(comp.col+s.dc,comp.row+s.dr);if(nc&&nc.state===STATE.LINK){ctx.beginPath();ctx.moveTo(s.ax,s.ay);ctx.lineTo(s.bx,s.by);ctx.stroke();}});
 
-    ctx.fillStyle='#ffffff'; ctx.font='bold 8px Courier New'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.shadowColor=pal.glow; ctx.shadowBlur=8;
-    ctx.fillText('CORE',cx,cy);
-    ctx.shadowBlur=0;
+    ctx.fillStyle='#ffffff';ctx.font='bold 8px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowColor=pal.glow;ctx.shadowBlur=8;ctx.fillText('CORE',cx,cy);ctx.shadowBlur=0;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // DRAW — component pulse halos
-  // ─────────────────────────────────────────────────────────────────────────────
-  function drawHalos(t, c0, c1, r0, r1) {
-    const allComps = [...components, ...player.ownedComponents];
-    for (const comp of allComps) {
-      if (comp.col<c0||comp.col>c1||comp.row<r0||comp.row>r1) continue;
-      const cx=comp.col*CS+CS/2, cy=comp.row*CS+CS/2;
+  // ── Draw: pulse halos ────────────────────────────────────────────────────────
+  function drawHalos(t,c0,c1,r0,r1){
+    const allComps=[...components,...player.ownedComponents];
+    for(const comp of allComps){
+      if(comp.col<c0||comp.col>c1||comp.row<r0||comp.row>r1)continue;
+      // No halo for disconnected player nodes
+      if(comp.owner==='player'&&!comp.connected)continue;
+      const cx=comp.col*CS+CS/2,cy=comp.row*CS+CS/2;
       const ph=Math.sin(t*comp.speed+comp.pulse);
-      const radius=22+ph*5, al=0.05+0.08*((ph+1)/2);
+      const radius=22+ph*5,al=0.05+0.08*((ph+1)/2);
       const pal=PAL[comp.compType];
-
-      ctx.strokeStyle=hexAlpha(pal.glow,al); ctx.lineWidth=1.5;
-      ctx.beginPath(); ctx.arc(cx,cy,radius,0,Math.PI*2); ctx.stroke();
-      ctx.strokeStyle=hexAlpha(pal.glow,al*0.3); ctx.lineWidth=1;
-      ctx.beginPath(); ctx.arc(cx,cy,radius+6,0,Math.PI*2); ctx.stroke();
+      ctx.strokeStyle=hexAlpha(pal.glow,al);ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.arc(cx,cy,radius,0,Math.PI*2);ctx.stroke();
+      ctx.strokeStyle=hexAlpha(pal.glow,al*0.3);ctx.lineWidth=1;
+      ctx.beginPath();ctx.arc(cx,cy,radius+6,0,Math.PI*2);ctx.stroke();
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // DRAW — signal dots
-  // ─────────────────────────────────────────────────────────────────────────────
-  function drawSignals(t) {
-    const allSegs = [...linkSegments, ...player.playerSegments];
-    allSegs.forEach((seg,i) => {
-      if (!seg.cells.length) return;
-      const isP    = i >= linkSegments.length;
-      const glow   = isP ? PAL.plinkGlow : PAL.linkGlow;
-      const period = 1.5+(i%5)*0.5;
-      const idx    = Math.floor(((t/period)%1)*seg.cells.length);
-      const c      = seg.cells[idx];
-      if (!c) return;
-      const cx=c.col*CS+CS/2, cy=c.row*CS+CS/2;
-      ctx.fillStyle=hexAlpha(glow,0.22); ctx.beginPath(); ctx.arc(cx,cy,7,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle=glow; ctx.shadowColor=glow; ctx.shadowBlur=8;
-      ctx.beginPath(); ctx.arc(cx,cy,3,0,Math.PI*2); ctx.fill();
-      ctx.shadowBlur=0;
+  // ── Draw: world signal dots ──────────────────────────────────────────────────
+  function drawWorldSignals(t){
+    linkSegments.forEach((seg,i)=>{
+      if(!seg.cells.length)return;
+      const period=1.5+(i%5)*0.5;
+      const idx=Math.floor(((t/period)%1)*seg.cells.length);
+      const c=seg.cells[idx];if(!c)return;
+      const cx=c.col*CS+CS/2,cy=c.row*CS+CS/2;
+      ctx.fillStyle=hexAlpha(PAL.linkGlow,0.22);ctx.beginPath();ctx.arc(cx,cy,7,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle=PAL.linkGlow;ctx.shadowColor=PAL.linkGlow;ctx.shadowBlur=8;
+      ctx.beginPath();ctx.arc(cx,cy,3,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
     });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // DRAW — expansion hint cells
-  // ─────────────────────────────────────────────────────────────────────────────
-  function drawExpansionHints(t) {
-    const pulse = 0.3+0.2*Math.sin(t*2);
-    ctx.fillStyle=`rgba(140,50,255,${pulse*0.15})`;
-    ctx.strokeStyle=`rgba(180,80,255,${pulse*0.4})`;
+  // ── Draw: player network energy flow ─────────────────────────────────────────
+  // Three offset phases per segment for dense flow; heartbeat pulse from CORE
+  function drawNetworkFlow(t){
+    const hbPhase=(t*0.35)%1; // heartbeat: full network pulse every ~2.9s
+
+    player.playerSegments.forEach((seg,segIdx)=>{
+      if(!seg.cells.length)return;
+      const fromConn=player.connectedIds.has(seg.fromId);
+      const toConn  =player.connectedIds.has(seg.toId);
+      if(!fromConn||!toConn)return; // skip disconnected segments
+
+      const inPath=player.pathHighlight.has(segIdx);
+      const dotGlow=inPath?'#ffee88':PAL.plinkGlow;
+      const depth=Math.min(player.nodeDepth.get(seg.fromId)??0,player.nodeDepth.get(seg.toId)??0);
+      const speed=1.2+depth*0.15; // outer segments flow slightly slower
+
+      // 3 regular flow dots at staggered phases
+      for(let d=0;d<3;d++){
+        const phase=((t*speed/(2.0+segIdx%3*0.4))+(d/3))%1;
+        const idx=Math.floor(phase*seg.cells.length);
+        const c=seg.cells[idx];if(!c)continue;
+        const cx=c.col*CS+CS/2,cy=c.row*CS+CS/2;
+        ctx.fillStyle=hexAlpha(dotGlow,0.18);ctx.beginPath();ctx.arc(cx,cy,5,0,Math.PI*2);ctx.fill();
+        ctx.fillStyle=dotGlow;ctx.shadowColor=dotGlow;ctx.shadowBlur=6;
+        ctx.beginPath();ctx.arc(cx,cy,2,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+      }
+
+      // Heartbeat pulse: bright dot that radiates outward from CORE every cycle
+      // Arrives at depth D when hbPhase ≈ D / (maxDepth+1)
+      const maxD=player.maxDepth||1;
+      const segNormDepth=depth/maxD;
+      const hbWindow=0.12; // how wide the pulse "band" is
+      const hbDist=Math.abs(hbPhase-segNormDepth);
+      const hbMirror=Math.abs((hbPhase+1)-segNormDepth); // wrap
+      if(Math.min(hbDist,hbMirror)<hbWindow){
+        const hbStr=1-Math.min(hbDist,hbMirror)/hbWindow;
+        const hbIdx=Math.floor(hbPhase*seg.cells.length);
+        const hc=seg.cells[Math.min(hbIdx,seg.cells.length-1)];
+        if(hc){
+          const hcx=hc.col*CS+CS/2,hcy=hc.row*CS+CS/2;
+          ctx.fillStyle=hexAlpha(PAL.heartbeat,0.3*hbStr);ctx.beginPath();ctx.arc(hcx,hcy,9,0,Math.PI*2);ctx.fill();
+          ctx.fillStyle=PAL.heartbeat;ctx.shadowColor=PAL.heartbeat;ctx.shadowBlur=12*hbStr;
+          ctx.beginPath();ctx.arc(hcx,hcy,3,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+        }
+      }
+    });
+  }
+
+  // ── Draw: expansion ripple animations ────────────────────────────────────────
+  function drawAnimations(t){
+    for(let i=animations.length-1;i>=0;i--){
+      const anim=animations[i];
+      if(anim.t0===null)anim.t0=t; // set on first draw
+
+      const progress=(t-anim.t0)/0.9;
+      if(progress>=1){animations.splice(i,1);continue;}
+
+      const cx=anim.col*CS+CS/2,cy=anim.row*CS+CS/2;
+      const ease=1-Math.pow(1-progress,3); // ease-out
+
+      // Expanding ring
+      const r1=CS/2+ease*CS*1.8;
+      ctx.strokeStyle=`rgba(180,80,255,${(1-progress)*0.7})`;
+      ctx.lineWidth=2.5*(1-progress);
+      ctx.beginPath();ctx.arc(cx,cy,r1,0,Math.PI*2);ctx.stroke();
+
+      // Inner ring (faster)
+      const r2=CS/4+ease*CS*1.0;
+      ctx.strokeStyle=`rgba(220,160,255,${(1-progress)*0.4})`;
+      ctx.lineWidth=1;
+      ctx.beginPath();ctx.arc(cx,cy,r2,0,Math.PI*2);ctx.stroke();
+
+      // Center flash (only first 30%)
+      if(progress<0.3){
+        const flash=(1-(progress/0.3));
+        ctx.fillStyle=`rgba(255,200,255,${flash*0.6})`;
+        ctx.beginPath();ctx.arc(cx,cy,CS/3*(1-progress*2),0,Math.PI*2);ctx.fill();
+      }
+    }
+  }
+
+  // ── Draw: expansion hints ────────────────────────────────────────────────────
+  function drawExpansionHints(t){
+    const pulse=0.3+0.2*Math.sin(t*2);
+    const vb=viewBounds();
+    ctx.fillStyle=`rgba(140,50,255,${pulse*0.14})`;
+    ctx.strokeStyle=`rgba(180,80,255,${pulse*0.38})`;
     ctx.lineWidth=1;
-    for (const key of player.expandable) {
-      const [c,r]=key.split(',').map(Number);
-      const vb=viewBounds();
-      if (c*CS>vb.r||c*CS+CS<vb.l||r*CS>vb.b||r*CS+CS<vb.t) continue;
+    for(const key of player.expandable){
+      const[c,r]=key.split(',').map(Number);
+      if(c*CS>vb.r||(c+1)*CS<vb.l||r*CS>vb.b||(r+1)*CS<vb.t)continue;
       ctx.fillRect(c*CS,r*CS,CS,CS);
       ctx.strokeRect(c*CS+0.5,r*CS+0.5,CS-1,CS-1);
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // DRAW — selection highlight
-  // ─────────────────────────────────────────────────────────────────────────────
-  function drawSelection(sel, t) {
-    if (!sel) return;
-    const {col,row,cell}=sel;
-    const px=col*CS, py=row*CS, cx=px+CS/2, cy=py+CS/2;
+  // ── Draw: selection ──────────────────────────────────────────────────────────
+  function drawSelection(t){
+    if(!selectedCell)return;
+    const{col,row,cell}=selectedCell;
+    const px=col*CS,py=row*CS,cx=px+CS/2,cy=py+CS/2;
     const pulse=0.5+0.5*Math.sin(t*4);
-
-    ctx.strokeStyle=`rgba(255,255,255,${pulse})`;
-    ctx.lineWidth=2; ctx.strokeRect(px,py,CS,CS);
-
-    if (cell.state===STATE.COMPONENT) {
+    ctx.strokeStyle=`rgba(255,255,255,${pulse})`;ctx.lineWidth=2;ctx.strokeRect(px,py,CS,CS);
+    if(cell.state===STATE.COMPONENT){
       const pal=PAL[cell.compType]||PAL[COMP.CPU];
-      ctx.strokeStyle=hexAlpha(pal.glow,pulse*0.85); ctx.lineWidth=1;
-      ctx.beginPath(); ctx.arc(cx,cy,28,0,Math.PI*2); ctx.stroke();
-      const gap=CS/2+4, arm=13;
-      ctx.strokeStyle=`rgba(255,255,255,${pulse*0.4})`; ctx.lineWidth=1;
+      ctx.strokeStyle=hexAlpha(pal.glow,pulse*0.85);ctx.lineWidth=1;
+      ctx.beginPath();ctx.arc(cx,cy,28,0,Math.PI*2);ctx.stroke();
+      const gap=CS/2+4,arm=13;
+      ctx.strokeStyle=`rgba(255,255,255,${pulse*0.4})`;ctx.lineWidth=1;
       ctx.beginPath();
-      ctx.moveTo(cx-gap-arm,cy); ctx.lineTo(cx-gap,cy);
-      ctx.moveTo(cx+gap,cy);     ctx.lineTo(cx+gap+arm,cy);
-      ctx.moveTo(cx,cy-gap-arm); ctx.lineTo(cx,cy-gap);
-      ctx.moveTo(cx,cy+gap);     ctx.lineTo(cx,cy+gap+arm);
+      ctx.moveTo(cx-gap-arm,cy);ctx.lineTo(cx-gap,cy);ctx.moveTo(cx+gap,cy);ctx.lineTo(cx+gap+arm,cy);
+      ctx.moveTo(cx,cy-gap-arm);ctx.lineTo(cx,cy-gap);ctx.moveTo(cx,cy+gap);ctx.lineTo(cx,cy+gap+arm);
       ctx.stroke();
-    } else {
-      ctx.strokeStyle=hexAlpha(PAL.plinkGlow,pulse*0.7); ctx.lineWidth=1;
+    }else{
+      ctx.strokeStyle=hexAlpha(PAL.plinkGlow,pulse*0.7);ctx.lineWidth=1;
       ctx.strokeRect(px+4,py+4,CS-8,CS-8);
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // MINIMAP  — redrawn fully each frame (120×120 is negligible cost)
-  // ─────────────────────────────────────────────────────────────────────────────
-  const MM_W=120, MM_H=120;
-  const MM_SX=MM_W/WORLD_W, MM_SY=MM_H/WORLD_H;
-  const MM_PW=Math.max(1,CS*MM_SX), MM_PH=Math.max(1,CS*MM_SY);
-
-  const MM_CLR = {
-    [COMP.CPU]:'#0066ff', [COMP.RAM]:'#00ccff',
-    [COMP.POWER]:'#ff8800', [COMP.ENEMY_NODE]:'#ff0044',
-    [COMP.RESOURCE_NODE]:'#00ff66',
-    [COMP.CORE_NODE]:'#ffffff', [COMP.PLAYER_NODE]:'#aa44ff',
+  // ── Minimap ──────────────────────────────────────────────────────────────────
+  const MM_W=120,MM_H=120;
+  const MM_SX=MM_W/WORLD_W,MM_SY=MM_H/WORLD_H;
+  const MM_PW=Math.max(1,CS*MM_SX),MM_PH=Math.max(1,CS*MM_SY);
+  const MM_CLR={
+    [COMP.CPU]:'#0066ff',[COMP.RAM]:'#00ccff',[COMP.POWER]:'#ff8800',
+    [COMP.ENEMY_NODE]:'#ff0044',[COMP.RESOURCE_NODE]:'#00ff66',
+    [COMP.CORE_NODE]:'#ffffff',[COMP.PLAYER_NODE]:'#aa44ff',
   };
 
-  function drawMinimap(t) {
-    mmCtx.fillStyle='#000811'; mmCtx.fillRect(0,0,MM_W,MM_H);
-
-    // Iterate grid for LINK cells
-    for (let r=0;r<GRID_ROWS;r++) {
-      for (let c=0;c<GRID_COLS;c++) {
+  function drawMinimap(t){
+    mmCtx.fillStyle='#000811';mmCtx.fillRect(0,0,MM_W,MM_H);
+    for(let r=0;r<GRID_ROWS;r++){
+      for(let c=0;c<GRID_COLS;c++){
         const cell=grid.get(c,r);
-        if (cell.state!==STATE.LINK) continue;
-        mmCtx.fillStyle=cell.owner==='player'?'#6622aa':'#007755';
+        if(cell.state!==STATE.LINK)continue;
+        if(cell.owner==='player'){
+          const conn=player.connectedIds.has(cell.fromId)&&player.connectedIds.has(cell.toId);
+          mmCtx.fillStyle=conn?'#6622aa':'#221133';
+        }else{
+          mmCtx.fillStyle='#007755';
+        }
         mmCtx.fillRect(c*CS*MM_SX,r*CS*MM_SY,MM_PW,MM_PH);
       }
     }
-
-    // World components
     components.forEach(comp=>{
-      mmCtx.fillStyle=MM_CLR[comp.compType]||'#aaaaaa';
+      mmCtx.fillStyle=MM_CLR[comp.compType]||'#aaa';
       mmCtx.fillRect(comp.col*CS*MM_SX-1,comp.row*CS*MM_SY-1,MM_PW+2,MM_PH+2);
     });
-
-    // Player components
     player.ownedComponents.forEach(comp=>{
-      if (comp.compType===COMP.CORE_NODE) {
-        // Blink CORE_NODE on minimap
-        if (Math.sin(t*4)>0) {
-          mmCtx.fillStyle='#ffffff';
-          mmCtx.fillRect(comp.col*CS*MM_SX-2,comp.row*CS*MM_SY-2,MM_PW+4,MM_PH+4);
-        }
-      } else {
-        mmCtx.fillStyle='#aa44ff';
+      if(comp.compType===COMP.CORE_NODE){
+        if(Math.sin(t*4)>0){mmCtx.fillStyle='#ffffff';mmCtx.fillRect(comp.col*CS*MM_SX-2,comp.row*CS*MM_SY-2,MM_PW+4,MM_PH+4);}
+      }else{
+        mmCtx.fillStyle=comp.connected?'#aa44ff':'#442255';
         mmCtx.fillRect(comp.col*CS*MM_SX-1,comp.row*CS*MM_SY-1,MM_PW+2,MM_PH+2);
       }
     });
-
-    // Viewport rect
-    const W=canvas.width, H=canvas.height;
-    const vw=(W/zoom)*MM_SX, vh=(H/zoom)*MM_SY;
-    const vx=(camX-(W/zoom)/2)*MM_SX, vy=(camY-(H/zoom)/2)*MM_SY;
-    mmCtx.strokeStyle='#00ffcc'; mmCtx.lineWidth=1;
-    mmCtx.strokeRect(vx,vy,vw,vh);
+    const W=canvas.width,H=canvas.height;
+    const vw=(W/zoom)*MM_SX,vh=(H/zoom)*MM_SY;
+    const vx=(camX-(W/zoom)/2)*MM_SX,vy=(camY-(H/zoom)/2)*MM_SY;
+    mmCtx.strokeStyle='#00ffcc';mmCtx.lineWidth=1;mmCtx.strokeRect(vx,vy,vw,vh);
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // HUD UPDATE
-  // ─────────────────────────────────────────────────────────────────────────────
-  let lastFpsTime=0, fpsFrames=0, fpsVal=0;
+  // ── HUD update ───────────────────────────────────────────────────────────────
+  let lastFpsTime=0,fpsFrames=0,fpsVal=0;
+  function energyBar(v,max,w=10){const f=Math.round((v/max)*w);return'▓'.repeat(f)+'░'.repeat(w-f);}
 
-  function energyBar(v, max, w=10) {
-    const f=Math.round((v/max)*w);
-    return '▓'.repeat(f)+'░'.repeat(w-f);
-  }
-
-  function updateHUD(now) {
+  function updateHUD(now){
     fpsFrames++;
-    if (now-lastFpsTime>=500) {
-      fpsVal=Math.round(fpsFrames/((now-lastFpsTime)/1000));
-      fpsFrames=0; lastFpsTime=now;
-    }
-    const col=Math.floor(camX/CS), row=Math.floor(camY/CS);
-    document.getElementById('hud-sector').textContent=`SECTOR: ${col},${row}`;
+    if(now-lastFpsTime>=500){fpsVal=Math.round(fpsFrames/((now-lastFpsTime)/1000));fpsFrames=0;lastFpsTime=now;}
+    document.getElementById('hud-sector').textContent=`SECTOR: ${Math.floor(camX/CS)},${Math.floor(camY/CS)}`;
     document.getElementById('hud-zoom').textContent  =`ZOOM: ${zoom.toFixed(2)}x`;
     document.getElementById('hud-fps').textContent   =`FPS: ${fpsVal||'--'}`;
 
     const e=Math.floor(player.energy);
     document.getElementById('res-energy').textContent=`ENERGY ${energyBar(e,player.maxEnergy)} ${e}/${player.maxEnergy}`;
-    document.getElementById('res-cpu').textContent   =`CPU CAP  ${player.cpuCap}`;
-    document.getElementById('res-ram').textContent   =`RAM CAP  ${player.ramCap}`;
-    document.getElementById('res-nodes').textContent =`NODES    ${player.ownedComponents.length}`;
 
-    if (player.flashTimer<=0 && document.getElementById('hud-msg').textContent) {
-      document.getElementById('hud-msg').textContent='';
-    }
+    const total=player.ownedComponents.length;
+    const conn=player.ownedComponents.filter(c=>c.connected).length;
+    document.getElementById('res-nodes').textContent=`NODES  ${conn}/${total} CONNECTED`;
+
+    const netOk=conn===total;
+    document.getElementById('res-net').textContent=netOk?'NETWORK: STABLE':'NETWORK: DEGRADED';
+    document.getElementById('res-net').style.color=netOk?'#00ff88':'#ffaa00';
+
+    if(player.flashTimer<=0)document.getElementById('hud-msg').textContent='';
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // MAIN LOOP
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ── Main loop ────────────────────────────────────────────────────────────────
   let lastNow=0;
 
-  function loop(now) {
-    const dt = Math.min((now-lastNow)/1000, 0.1); // cap dt to avoid spiral
-    lastNow  = now;
-    const t  = now*0.001;
+  function loop(now){
+    const dt=Math.min((now-lastNow)/1000,0.1);
+    lastNow=now;
+    const t=now*0.001;
 
-    // Energy regen
-    player.energy = Math.min(player.maxEnergy, player.energy + player.energyRegen*dt);
+    player.energy=Math.min(player.maxEnergy,player.energy+player.energyRegen*dt);
+    if(player.flashTimer>0)player.flashTimer-=dt;
 
-    // Flash timer
-    if (player.flashTimer>0) player.flashTimer-=dt;
-
-    // Keyboard pan
-    const speed=CAM_SPEED/zoom;
     const moving=(keys['ArrowLeft']||keys['KeyA'])||(keys['ArrowRight']||keys['KeyD'])||
                  (keys['ArrowUp']  ||keys['KeyW'])||(keys['ArrowDown'] ||keys['KeyS']);
-    if (moving) { followEnabled=false; followCooldown=3.0; }
-    if (keys['ArrowLeft'] ||keys['KeyA']) camX-=speed;
-    if (keys['ArrowRight']||keys['KeyD']) camX+=speed;
-    if (keys['ArrowUp']   ||keys['KeyW']) camY-=speed;
-    if (keys['ArrowDown'] ||keys['KeyS']) camY+=speed;
+    if(moving){followEnabled=false;followCooldown=3;}
+    if(keys['ArrowLeft'] ||keys['KeyA'])camX-=CAM_SPEED/zoom;
+    if(keys['ArrowRight']||keys['KeyD'])camX+=CAM_SPEED/zoom;
+    if(keys['ArrowUp']   ||keys['KeyW'])camY-=CAM_SPEED/zoom;
+    if(keys['ArrowDown'] ||keys['KeyS'])camY+=CAM_SPEED/zoom;
 
-    // Camera follow (when not manually controlled)
-    if (followCooldown>0) { followCooldown-=dt; if(followCooldown<=0) followEnabled=true; }
-    if (followEnabled && !dragging) {
-      const tx=player.activeCol*CS+CS/2, ty=player.activeRow*CS+CS/2;
-      camX+=(tx-camX)*0.07; camY+=(ty-camY)*0.07;
+    if(followCooldown>0){followCooldown-=dt;if(followCooldown<=0)followEnabled=true;}
+    if(followEnabled&&!dragging){
+      const tx=player.activeCol*CS+CS/2,ty=player.activeRow*CS+CS/2;
+      camX+=(tx-camX)*0.07;camY+=(ty-camY)*0.07;
     }
     clampCam();
 
-    // ── Draw ──────────────────────────────────────────────────────────────────
-    const W=canvas.width, H=canvas.height;
+    // ── Render ────────────────────────────────────────────────────────────────
+    const W=canvas.width,H=canvas.height;
     ctx.clearRect(0,0,W,H);
     ctx.save();
-    ctx.translate(W/2,H/2); ctx.scale(zoom,zoom); ctx.translate(-camX,-camY);
+    ctx.translate(W/2,H/2);ctx.scale(zoom,zoom);ctx.translate(-camX,-camY);
 
     const vb=viewBounds();
-    const c0=Math.max(0,Math.floor(vb.l/CS)-1);
-    const c1=Math.min(GRID_COLS-1,Math.ceil(vb.r/CS)+1);
-    const r0=Math.max(0,Math.floor(vb.t/CS)-1);
-    const r1=Math.min(GRID_ROWS-1,Math.ceil(vb.b/CS)+1);
+    const c0=Math.max(0,Math.floor(vb.l/CS)-1),c1=Math.min(GRID_COLS-1,Math.ceil(vb.r/CS)+1);
+    const r0=Math.max(0,Math.floor(vb.t/CS)-1),r1=Math.min(GRID_ROWS-1,Math.ceil(vb.b/CS)+1);
 
     // Background
-    ctx.fillStyle=PAL.bg; ctx.fillRect(0,0,WORLD_W,WORLD_H);
+    ctx.fillStyle=PAL.bg;ctx.fillRect(0,0,WORLD_W,WORLD_H);
 
     // Minor grid
-    ctx.strokeStyle=PAL.gridMinor; ctx.lineWidth=1/zoom;
+    ctx.strokeStyle=PAL.gridMinor;ctx.lineWidth=1/zoom;
     for(let c=c0;c<=c1+1;c++){ctx.beginPath();ctx.moveTo(c*CS,r0*CS);ctx.lineTo(c*CS,(r1+1)*CS);ctx.stroke();}
     for(let r=r0;r<=r1+1;r++){ctx.beginPath();ctx.moveTo(c0*CS,r*CS);ctx.lineTo((c1+1)*CS,r*CS);ctx.stroke();}
 
     // Major grid
-    ctx.strokeStyle=PAL.gridMajor; ctx.lineWidth=1.5/zoom;
+    ctx.strokeStyle=PAL.gridMajor;ctx.lineWidth=1.5/zoom;
     for(let c=Math.floor(c0/8)*8;c<=c1+8;c+=8){if(c<0||c>GRID_COLS)continue;ctx.beginPath();ctx.moveTo(c*CS,r0*CS);ctx.lineTo(c*CS,(r1+1)*CS);ctx.stroke();}
     for(let r=Math.floor(r0/8)*8;r<=r1+8;r+=8){if(r<0||r>GRID_ROWS)continue;ctx.beginPath();ctx.moveTo(c0*CS,r*CS);ctx.lineTo((c1+1)*CS,r*CS);ctx.stroke();}
 
-    // Expansion hints
+    // 1. Expansion hints
     drawExpansionHints(t);
 
-    // LINK cells
-    for(let r=r0;r<=r1;r++) for(let c=c0;c<=c1;c++){const cell=grid.get(c,r);if(cell&&cell.state===STATE.LINK)drawLinkCell(c,r);}
+    // 2. All link cells (world + player, with connectivity colouring)
+    for(let r=r0;r<=r1;r++)for(let c=c0;c<=c1;c++){const cell=grid.get(c,r);if(cell&&cell.state===STATE.LINK)drawLinkCell(c,r);}
 
-    // Halos
+    // 3. Pulse halos (skip disconnected player nodes)
     drawHalos(t,c0,c1,r0,r1);
 
-    // World components
+    // 4. Components
     for(const comp of components){if(comp.col>=c0&&comp.col<=c1&&comp.row>=r0&&comp.row<=r1)drawComponent(comp,t);}
-
-    // Player components
     for(const comp of player.ownedComponents){if(comp.col>=c0&&comp.col<=c1&&comp.row>=r0&&comp.row<=r1)drawComponent(comp,t);}
 
-    // Signal dots
-    drawSignals(t);
+    // 5. World signal dots
+    drawWorldSignals(t);
 
-    // Selection
-    drawSelection(selectedCell,t);
+    // 6. Player network energy flow (heartbeat + flow dots)
+    drawNetworkFlow(t);
+
+    // 7. Expansion animations
+    drawAnimations(t);
+
+    // 8. Selection highlight
+    drawSelection(t);
 
     ctx.restore();
 
