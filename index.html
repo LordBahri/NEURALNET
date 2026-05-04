@@ -7,9 +7,7 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-
   #c { display:block; position:fixed; top:0; left:0; touch-action:none; }
-
   #hud {
     position: fixed; top: 12px; left: 12px;
     font: 11px/1.85 'Courier New', monospace;
@@ -18,18 +16,17 @@
   .hud-title { font-size:16px; font-weight:bold; letter-spacing:3px; color:#ff00ff; text-shadow:0 0 12px #ff00ff; margin-bottom:4px; }
   .hud-row   { color:#00ffcc; text-shadow:0 0 7px #00ffcc; }
   .hud-sep   { border-top:1px solid rgba(0,255,204,0.12); margin:5px 0 3px; }
-
   #res-energy  { color:#ffcc00; text-shadow:0 0 6px #ffaa00; }
   #res-silicon { color:#44ff88; text-shadow:0 0 6px #00cc55; }
   #res-data    { color:#44eeff; text-shadow:0 0 6px #0099cc; }
   #res-nodes   { color:#bb55ff; text-shadow:0 0 5px #8833cc; }
   #res-net     { color:#00ff88; text-shadow:0 0 5px #00cc66; font-size:10px; }
   #res-eff     { color:#ffaa44; text-shadow:0 0 5px #ff8800; font-size:10px; }
+  #res-threat  { color:#ff2244; text-shadow:0 0 5px #cc0022; font-size:10px; }
   #hud-msg     { color:#ff4466; text-shadow:0 0 6px #ff2244; font-size:10px; min-height:15px; }
-  #hud-cell   { color:#aaffdd; font-size:10px; line-height:1.7; min-height:28px; }
-  #hud-cell b { color:#fff; font-weight:normal; }
-  #hud-path   { color:#aa66ff; font-size:10px; min-height:15px; }
-
+  #hud-cell    { color:#aaffdd; font-size:10px; line-height:1.7; min-height:28px; }
+  #hud-cell b  { color:#fff; font-weight:normal; }
+  #hud-path    { color:#aa66ff; font-size:10px; min-height:15px; }
   #ctrl {
     position:fixed; bottom:12px; right:12px;
     color:#0088ff; font:10px/1.8 'Courier New',monospace;
@@ -59,6 +56,7 @@
   <div id="res-nodes">NODES  0/0 CONNECTED</div>
   <div id="res-net">NETWORK: INITIALIZING</div>
   <div id="res-eff">EFFICIENCY: ---%</div>
+  <div id="res-threat">THREAT: SCANNING...</div>
   <div class="hud-sep"></div>
   <div id="hud-msg"></div>
   <div id="hud-path"></div>
@@ -67,9 +65,8 @@
 
 <div id="ctrl">
   CLICK EMPTY: expand<br>
-  CLICK NODE: select / trace path<br>
-  DRAG: pan camera<br>
-  SCROLL / PINCH: zoom<br>
+  CLICK NODE: select / trace<br>
+  DRAG: pan &nbsp; SCROLL: zoom<br>
   WASD / ARROWS: pan
 </div>
 
@@ -87,6 +84,7 @@
     CPU:'CPU', RAM:'RAM', POWER:'POWER',
     ENEMY_NODE:'ENEMY_NODE', RESOURCE_NODE:'RESOURCE_NODE',
     CORE_NODE:'CORE_NODE', PLAYER_NODE:'PLAYER_NODE',
+    VIRUS_CORE:'VIRUS_CORE', VIRUS_NODE:'VIRUS_NODE',
   });
 
   // ── World dims ──────────────────────────────────────────────────────────────
@@ -101,6 +99,7 @@
     plinkCore:'#8833dd', plinkGlow:'#bb66ff',
     plinkDim:'#332244',  plinkDimGlow:'#443355',
     heartbeat:'#dd99ff',
+    elinkCore:'#880022', elinkGlow:'#cc0033',
     [COMP.CPU]:           {fill:'#001a3d',border:'#0066ff',glow:'#0099ff',dot:'#0099ff'},
     [COMP.RAM]:           {fill:'#001a2a',border:'#00ccff',glow:'#00eeff',dot:'#00eeff'},
     [COMP.POWER]:         {fill:'#2a1400',border:'#ff8800',glow:'#ffaa00',dot:'#ffcc00'},
@@ -108,11 +107,15 @@
     [COMP.RESOURCE_NODE]: {fill:'#001a0a',border:'#00ff66',glow:'#44ff88',dot:'#00ff88'},
     [COMP.CORE_NODE]:     {fill:'#160022',border:'#dd66ff',glow:'#ff88ff',dot:'#ffffff'},
     [COMP.PLAYER_NODE]:   {fill:'#0d001a',border:'#8833dd',glow:'#aa55ff',dot:'#cc88ff'},
+    [COMP.VIRUS_CORE]:    {fill:'#1a0008',border:'#ff0055',glow:'#ff2266',dot:'#ff88aa'},
+    [COMP.VIRUS_NODE]:    {fill:'#110005',border:'#cc0033',glow:'#ee1144',dot:'#ff4466'},
   };
+
   const COMP_SHORT = {
-    [COMP.CPU]:'CPU',[COMP.RAM]:'RAM',[COMP.POWER]:'PWR',
-    [COMP.ENEMY_NODE]:'ENM',[COMP.RESOURCE_NODE]:'RES',
-    [COMP.CORE_NODE]:'CORE',[COMP.PLAYER_NODE]:'NODE',
+    [COMP.CPU]:'CPU',  [COMP.RAM]:'RAM',  [COMP.POWER]:'PWR',
+    [COMP.ENEMY_NODE]:'ENM', [COMP.RESOURCE_NODE]:'RES',
+    [COMP.CORE_NODE]:'CORE', [COMP.PLAYER_NODE]:'NODE',
+    [COMP.VIRUS_CORE]:'VCOR',[COMP.VIRUS_NODE]:'VIRU',
   };
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -131,10 +134,10 @@
       this._cells=new Array(cols*rows).fill(null).map(()=>({state:STATE.EMPTY}));
     }
     inBounds(c,r){return c>=0&&c<this.cols&&r>=0&&r<this.rows;}
-    get(c,r)     {return this.inBounds(c,r)?this._cells[r*this.cols+c]:null;}
-    _set(c,r,v)  {if(this.inBounds(c,r)){this._cells[r*this.cols+c]=v;return true;}return false;}
+    get(c,r)    {return this.inBounds(c,r)?this._cells[r*this.cols+c]:null;}
+    _set(c,r,v) {if(this.inBounds(c,r)){this._cells[r*this.cols+c]=v;return true;}return false;}
     writeIfEmpty(c,r,v){const cur=this.get(c,r);if(!cur||cur.state!==STATE.EMPTY)return false;return this._set(c,r,v);}
-    isEmpty(c,r) {const v=this.get(c,r);return v!==null&&v.state===STATE.EMPTY;}
+    isEmpty(c,r){const v=this.get(c,r);return v!==null&&v.state===STATE.EMPTY;}
   }
 
   // ── Link router ─────────────────────────────────────────────────────────────
@@ -180,7 +183,6 @@
 
     const linkSegments=[],linkCount={};
     components.forEach(c=>{linkCount[c.id]=0;});
-
     for(const src of components){
       if(linkCount[src.id]>=3)continue;
       const nearby=components.filter(c=>c.id!==src.id)
@@ -208,47 +210,51 @@
   const components=world.components;
   const linkSegments=world.linkSegments;
 
-  // ── Animations array ─────────────────────────────────────────────────────────
-  // Each entry: {col, row, t0}   (expand ripple)
-  const animations=[];
-
-  // ── Floating resource texts ───────────────────────────────────────────────────
-  // Each entry: {wx, wy, text, color, t0, life}   (world-space coords)
-  const floatTexts=[];
+  // ── Animation arrays ─────────────────────────────────────────────────────────
+  const animations=[];    // {col,row,t0}  player expand ripples  (purple)
+  const enemyAnims=[];    // {col,row,t0}  enemy  expand ripples  (red)
+  const floatTexts=[];    // {wx,wy,text,color,t0,life}
 
   // ── Player state ─────────────────────────────────────────────────────────────
   const player={
-    col:0,row:0,
-    activeCol:0,activeRow:0,
+    col:0,row:0,activeCol:0,activeRow:0,
     energy:80,maxEnergy:100,energyRegen:5,
     ownedCells:new Set(),
     ownedComponents:[],
-    playerSegments:[],        // {fromId,toId,cells}
+    playerSegments:[],
     expandable:new Set(),
-
-    // ── Graph (nodes + edges) ─────────────────────────────────────────────────
-    graph:new Map(),          // Map<id, Set<id>>  adjacency list
-    nodeDepth:new Map(),      // Map<id, number>   BFS depth from CORE
-    connectedIds:new Set(),   // Set<id>           reachable from CORE via BFS
+    graph:new Map(),
+    nodeDepth:new Map(),
+    connectedIds:new Set(),
     maxDepth:0,
-    bfsParent:new Map(),      // Map<id, id|null>  for path tracing
-    segByPair:new Map(),      // Map<"a,b", segIdx> both directions
-    pathHighlight:new Set(),  // Set<segIdx> currently highlighted path
-
+    bfsParent:new Map(),
+    segByPair:new Map(),
+    pathHighlight:new Set(),
     nextId:10000,
     expandCost:15,
     flashMsg:'',flashTimer:0,
     coreId:null,
-
-    // ── Resources ──────────────────────────────────────────────────────────────
-    silicon:0, maxSilicon:150,
-    data:0,    maxData:150,
+    silicon:0,maxSilicon:150,
+    data:0,maxData:150,
     efficiency:1.0,
-    incomeTick:3.0, lastIncomeTick:-99,
-    nodeYield:new Map(),  // Map<id, 'SI'|'DATA'|'ENERGY'>
+    incomeTick:3.0,lastIncomeTick:-99,
+    nodeYield:new Map(),
   };
 
-  // ── BFS connectivity from CORE_NODE ─────────────────────────────────────────
+  // ── Enemy state ───────────────────────────────────────────────────────────────
+  const enemy={
+    ownedCells:new Set(),
+    ownedComponents:[],
+    ownedSegments:[],
+    graph:new Map(),
+    nextId:50000,
+    rng:makeRng(0xBADC0DE),
+    lastExpand:0,     // set to gameT0 on first frame
+    nextExpand:8.0,   // seconds until first expansion
+    maxNodes:22,
+  };
+
+  // ── BFS connectivity from CORE ───────────────────────────────────────────────
   function recomputeConnectivity(){
     const coreId=player.coreId;
     player.connectedIds=new Set();
@@ -256,12 +262,10 @@
     player.bfsParent=new Map();
     player.maxDepth=0;
     if(!coreId||!player.graph.has(coreId))return;
-
     const queue=[coreId];
     player.connectedIds.add(coreId);
     player.nodeDepth.set(coreId,0);
     player.bfsParent.set(coreId,null);
-
     while(queue.length){
       const id=queue.shift();
       const depth=player.nodeDepth.get(id);
@@ -275,14 +279,9 @@
         }
       }
     }
-
-    // Mark components as connected/disconnected
-    player.ownedComponents.forEach(comp=>{
-      comp.connected=player.connectedIds.has(comp.id);
-    });
+    player.ownedComponents.forEach(comp=>{comp.connected=player.connectedIds.has(comp.id);});
   }
 
-  // ── Highlight path from selected node back to CORE ──────────────────────────
   function highlightPath(nodeId){
     player.pathHighlight=new Set();
     if(!nodeId||!player.bfsParent.has(nodeId))return;
@@ -296,7 +295,7 @@
     }
   }
 
-  // ── Place player at center ───────────────────────────────────────────────────
+  // ── Place player CORE at grid center ─────────────────────────────────────────
   (function placePlayer(){
     const cc=Math.floor(GRID_COLS/2),cr=Math.floor(GRID_ROWS/2);
     for(let radius=0;radius<=20;radius++){
@@ -342,15 +341,9 @@
 
   // ── Resource gathering ───────────────────────────────────────────────────────
   function spawnFloat(col,row,text,color,t){
-    floatTexts.push({
-      wx:col*CS+CS/2+(Math.random()-0.5)*CS*0.4,
-      wy:row*CS+CS/4,
-      text,color,t0:t,life:1.5,
-    });
+    floatTexts.push({wx:col*CS+CS/2+(Math.random()-0.5)*CS*0.4,wy:row*CS+CS/4,text,color,t0:t,life:1.5});
   }
 
-  // For each connected player node, determine what world resource it taps (reach=2).
-  // Priority: RESOURCE_NODE > CPU/RAM > POWER.  Stored in player.nodeYield.
   function computeNodeYields(){
     player.nodeYield=new Map();
     const reach=2;
@@ -370,12 +363,10 @@
     }
   }
 
-  // Runs on a fixed tick; grants resources scaled by network efficiency.
   function processIncome(t){
     const connArr=player.ownedComponents.filter(c=>c.connected);
     player.efficiency=player.ownedComponents.length>0?connArr.length/player.ownedComponents.length:1;
     computeNodeYields();
-
     const reach=2;
     let siGain=0,dataGain=0,eGain=0;
     for(const comp of connArr){
@@ -384,14 +375,11 @@
         const d=Math.abs(wc.col-comp.col)+Math.abs(wc.row-comp.row);
         if(d>reach)continue;
         if(wc.compType===COMP.RESOURCE_NODE){
-          siGain+=2;
-          if(!floated){spawnFloat(comp.col,comp.row,'+SI','#44ff88',t);floated=true;}
+          siGain+=2;if(!floated){spawnFloat(comp.col,comp.row,'+SI','#44ff88',t);floated=true;}
         }else if(wc.compType===COMP.CPU||wc.compType===COMP.RAM){
-          dataGain+=2;
-          if(!floated){spawnFloat(comp.col,comp.row,'+DATA','#44eeff',t);floated=true;}
+          dataGain+=2;if(!floated){spawnFloat(comp.col,comp.row,'+DATA','#44eeff',t);floated=true;}
         }else if(wc.compType===COMP.POWER){
-          eGain+=10;
-          if(!floated){spawnFloat(comp.col,comp.row,'+EN','#ffcc44',t);floated=true;}
+          eGain+=10;if(!floated){spawnFloat(comp.col,comp.row,'+EN','#ffcc44',t);floated=true;}
         }
       }
     }
@@ -401,7 +389,81 @@
     player.energy  =Math.min(player.maxEnergy,  player.energy  +Math.round(eGain   *eff));
   }
 
-  // ── Expansion ────────────────────────────────────────────────────────────────
+  // ── Enemy: initialise VIRUS_COREs near world ENEMY_NODEs ────────────────────
+  function initEnemies(){
+    const seeds=components.filter(c=>c.compType===COMP.ENEMY_NODE).slice(0,3);
+    for(const seed of seeds){
+      let placed=false;
+      for(let attempt=0;attempt<60&&!placed;attempt++){
+        const dc=Math.round((enemy.rng()-0.5)*6);
+        const dr=Math.round((enemy.rng()-0.5)*6);
+        const c=seed.col+dc,r=seed.row+dr;
+        if(!grid.inBounds(c,r)||!grid.isEmpty(c,r))continue;
+        const id=enemy.nextId++;
+        const cell={state:STATE.COMPONENT,id,compType:COMP.VIRUS_CORE,owner:'enemy',
+                    pulse:enemy.rng()*Math.PI*2,speed:0.8+enemy.rng()*0.9};
+        if(grid.writeIfEmpty(c,r,cell)){
+          enemy.ownedComponents.push({col:c,row:r,...cell});
+          enemy.ownedCells.add(`${c},${r}`);
+          enemy.graph.set(id,new Set());
+          placed=true;
+        }
+      }
+    }
+  }
+
+  // ── Enemy: one expansion step per AI tick ────────────────────────────────────
+  function enemyExpand(t){
+    if(enemy.ownedComponents.length>=enemy.maxNodes)return;
+
+    const srcs=[...enemy.ownedComponents].sort(()=>enemy.rng()-0.5);
+    for(const src of srcs){
+      const candidates=[];
+      for(let dc=-11;dc<=11;dc++){
+        for(let dr=-11;dr<=11;dr++){
+          const d=Math.abs(dc)+Math.abs(dr);
+          if(d<3||d>11)continue;
+          const c=src.col+dc,r=src.row+dr;
+          if(!grid.inBounds(c,r)||!grid.isEmpty(c,r))continue;
+          candidates.push({col:c,row:r,dist:d});
+        }
+      }
+      if(!candidates.length)continue;
+
+      candidates.sort((a,b)=>a.dist-b.dist);
+      const pick=candidates[Math.floor(Math.pow(enemy.rng(),1.4)*Math.min(candidates.length,10))];
+
+      const seg=routeLink(grid,src,pick,enemy.rng()>0.5)??routeLink(grid,src,pick,enemy.rng()<=0.5);
+      if(!seg)continue;
+
+      const newId=enemy.nextId++;
+      const segIdx=enemy.ownedSegments.length;
+      if(!enemy.graph.has(src.id))enemy.graph.set(src.id,new Set());
+      enemy.graph.set(newId,new Set());
+      enemy.graph.get(src.id).add(newId);
+      enemy.graph.get(newId).add(src.id);
+
+      enemy.ownedSegments.push({fromId:src.id,toId:newId,cells:seg});
+      for(const{col:lc,row:lr}of seg){
+        grid.writeIfEmpty(lc,lr,{state:STATE.LINK,owner:'enemy',fromId:src.id,toId:newId,segIdx});
+      }
+      const newCell={state:STATE.COMPONENT,id:newId,compType:COMP.VIRUS_NODE,owner:'enemy',
+                     pulse:enemy.rng()*Math.PI*2,speed:0.7+enemy.rng()*1.1};
+      if(grid.writeIfEmpty(pick.col,pick.row,newCell)){
+        enemy.ownedComponents.push({col:pick.col,row:pick.row,...newCell});
+        enemy.ownedCells.add(`${pick.col},${pick.row}`);
+        enemyAnims.push({col:pick.col,row:pick.row,t0:null});
+      }
+      recomputeExpandable();
+      break;
+    }
+    // Schedule next expansion 5-9 s from now
+    enemy.nextExpand=5+enemy.rng()*4;
+  }
+
+  initEnemies();
+
+  // ── Player: expand into empty cell ──────────────────────────────────────────
   function tryExpand(col,row){
     if(!grid.inBounds(col,row)||!grid.isEmpty(col,row))return;
     if(player.energy<player.expandCost){showFlash('INSUFFICIENT ENERGY');return;}
@@ -421,41 +483,29 @@
 
     const newId=player.nextId++;
     const segIdx=player.playerSegments.length;
-
-    // Register edge in graph (both directions)
     if(!player.graph.has(srcComp.id))player.graph.set(srcComp.id,new Set());
     player.graph.set(newId,new Set());
     player.graph.get(srcComp.id).add(newId);
     player.graph.get(newId).add(srcComp.id);
-
-    // Register segment for path lookup (both key directions)
     player.segByPair.set(`${srcComp.id},${newId}`,segIdx);
     player.segByPair.set(`${newId},${srcComp.id}`,segIdx);
-
     player.playerSegments.push({fromId:srcComp.id,toId:newId,cells:seg});
-
     for(const{col:lc,row:lr}of seg){
       grid.writeIfEmpty(lc,lr,{state:STATE.LINK,owner:'player',fromId:srcComp.id,toId:newId,segIdx});
     }
-
     const newCell={state:STATE.COMPONENT,id:newId,compType:COMP.PLAYER_NODE,owner:'player',
                    pulse:Math.random()*Math.PI*2,speed:1.1+Math.random()*0.5,connected:true};
     grid.writeIfEmpty(col,row,newCell);
     player.ownedComponents.push({col,row,...newCell});
     player.ownedCells.add(`${col},${row}`);
-
     player.energy=Math.max(0,player.energy-player.expandCost);
     player.activeCol=col;player.activeRow=row;
     player.flashMsg='';
     document.getElementById('hud-msg').textContent='';
-
-    // Update graph + connectivity + expandable
     recomputeConnectivity();
     recomputeExpandable();
     computeNodeYields();
-
-    // Expansion animation
-    animations.push({col,row,t0:null}); // t0 set on first draw
+    animations.push({col,row,t0:null});
   }
 
   // ── Canvas / camera ──────────────────────────────────────────────────────────
@@ -567,6 +617,18 @@
     const el=document.getElementById('hud-cell');
     const ph=document.getElementById('hud-path');
     if(!cell){el.innerHTML='';ph.textContent='';return;}
+
+    if(cell.owner==='enemy'){
+      if(cell.state===STATE.COMPONENT){
+        el.innerHTML=`STATE: <b>COMPONENT</b> <b style="color:#ff2244">HOSTILE</b><br>TYPE: <b>${cell.compType}</b>  CELL: <b>${col},${row}</b>`;
+        ph.textContent='CORRUPTED NODE — threat active';
+      }else{
+        el.innerHTML=`STATE: <b>LINK</b> <b style="color:#ff2244">HOSTILE</b>  CELL: <b>${col},${row}</b>`;
+        ph.textContent='';
+      }
+      return;
+    }
+
     if(cell.state===STATE.COMPONENT){
       const own=cell.owner==='player'?'<b>PLAYER</b>':'<b>WORLD</b>';
       const conn=cell.owner==='player'?(cell.connected?'<b style="color:#00ff88">ONLINE</b>':'<b style="color:#ff4444">OFFLINE</b>'):'';
@@ -591,13 +653,14 @@
   function drawLinkCell(c,r){
     const cell=grid.get(c,r);
     const isP=cell&&cell.owner==='player';
-
-    // Determine connectivity and highlight state
+    const isE=cell&&cell.owner==='enemy';
     const connected=!isP||(player.connectedIds.has(cell.fromId)&&player.connectedIds.has(cell.toId));
     const inPath=isP&&player.pathHighlight.has(cell.segIdx??-1);
 
     let coreClr,glowClr,lineW,glowA;
-    if(!isP){
+    if(isE){
+      coreClr=PAL.elinkCore;glowClr=PAL.elinkGlow;lineW=2;glowA=0.13;
+    }else if(!isP){
       coreClr=PAL.linkCore;glowClr=PAL.linkGlow;lineW=2;glowA=0.11;
     }else if(!connected){
       coreClr=PAL.plinkDim;glowClr=PAL.plinkDimGlow;lineW=1;glowA=0.04;
@@ -610,7 +673,6 @@
     const cx=c*CS+CS/2,cy=r*CS+CS/2;
     const connH=linkConnects(c-1,r)||linkConnects(c+1,r);
     const connV=linkConnects(c,r-1)||linkConnects(c,r+1);
-
     ctx.lineCap='round';
     if(connH){
       ctx.strokeStyle=hexAlpha(glowClr,glowA);ctx.lineWidth=8;
@@ -625,15 +687,16 @@
       ctx.beginPath();ctx.moveTo(cx,cy-CS/2);ctx.lineTo(cx,cy+CS/2);ctx.stroke();
     }
     if(connH&&connV){
-      ctx.fillStyle=glowClr;
-      ctx.beginPath();ctx.arc(cx,cy,3,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle=glowClr;ctx.beginPath();ctx.arc(cx,cy,3,0,Math.PI*2);ctx.fill();
     }
   }
 
-  // ── Draw: world component ────────────────────────────────────────────────────
+  // ── Draw: world / generic component ─────────────────────────────────────────
   function drawComponent(comp,t){
     if(comp.compType===COMP.CORE_NODE)  {drawCoreNode(comp,t);return;}
     if(comp.compType===COMP.PLAYER_NODE){drawPlayerNode(comp,t);return;}
+    if(comp.compType===COMP.VIRUS_CORE) {drawVirusCore(comp,t);return;}
+    if(comp.compType===COMP.VIRUS_NODE) {drawVirusNode(comp,t);return;}
 
     const px=comp.col*CS,py=comp.row*CS,cx=px+CS/2,cy=py+CS/2;
     const pal=PAL[comp.compType];
@@ -653,13 +716,12 @@
     ctx.shadowColor=pal.glow;ctx.shadowBlur=5;ctx.fillText(COMP_SHORT[comp.compType],cx,cy);ctx.shadowBlur=0;
   }
 
-  // ── Draw: player node (with connected/disconnected states) ───────────────────
+  // ── Draw: player node ────────────────────────────────────────────────────────
   function drawPlayerNode(comp,t){
     const px=comp.col*CS,py=comp.row*CS,cx=px+CS/2,cy=py+CS/2;
     const isSelected=selectedCell&&selectedCell.col===comp.col&&selectedCell.row===comp.row;
 
     if(!comp.connected){
-      // Disconnected: dark gray body, red "LOST" indicator
       ctx.fillStyle='rgba(40,20,50,0.9)';ctx.fillRect(px+2,py+2,CS-4,CS-4);
       ctx.strokeStyle='#442233';ctx.lineWidth=1;
       ctx.setLineDash([4,4]);ctx.strokeRect(px+2,py+2,CS-4,CS-4);ctx.setLineDash([]);
@@ -669,7 +731,6 @@
     }
 
     const pal=PAL[COMP.PLAYER_NODE];
-    // Depth-based brightness: deeper nodes slightly dimmer
     const depth=player.nodeDepth.get(comp.id)??0;
     const dimF=Math.max(0.55,1-depth*0.08);
 
@@ -678,14 +739,12 @@
     ctx.strokeStyle=isSelected?'#ffdd88':pal.border;ctx.lineWidth=isSelected?2.5:2;
     ctx.strokeRect(px+2,py+2,CS-4,CS-4);
 
-    // Diagonal cross
     ctx.strokeStyle=hexAlpha(pal.glow,0.55*dimF);ctx.lineWidth=1;
     ctx.beginPath();
     ctx.moveTo(px+8,py+8);ctx.lineTo(px+CS-8,py+CS-8);
     ctx.moveTo(px+CS-8,py+8);ctx.lineTo(px+8,py+CS-8);
     ctx.stroke();
 
-    // Harvest indicator: corner brackets tinted by resource type
     const yType=player.nodeYield.get(comp.id);
     if(yType){
       const yClr=yType==='SI'?'#44ff88':yType==='DATA'?'#44eeff':'#ffcc44';
@@ -712,7 +771,7 @@
     ctx.fillText('NODE',cx,cy);ctx.shadowBlur=0;
   }
 
-  // ── Draw: CORE_NODE (hexagonal) ──────────────────────────────────────────────
+  // ── Draw: CORE_NODE (hex) ────────────────────────────────────────────────────
   function hexPath(ctx,cx,cy,r){
     ctx.beginPath();
     for(let i=0;i<6;i++){const a=(Math.PI/3)*i-Math.PI/6;const x=cx+r*Math.cos(a),y=cy+r*Math.sin(a);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);}
@@ -728,26 +787,90 @@
     hexPath(ctx,cx,cy,CS/2-4);ctx.fillStyle=pal.fill;ctx.fill();
     ctx.strokeStyle=pal.border;ctx.lineWidth=2;ctx.stroke();
     hexPath(ctx,cx,cy,CS/4);ctx.strokeStyle=hexAlpha(pal.glow,0.5+0.4*pulse);ctx.lineWidth=1;ctx.stroke();
-
     const r=3+pulse*3;
+    ctx.fillStyle=pal.glow;ctx.shadowColor=pal.glow;ctx.shadowBlur=10+pulse*8;
+    ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+    const sides=[{dc:-1,dr:0,ax:px,ay:cy,bx:px+4,by:cy},{dc:1,dr:0,ax:px+CS-4,ay:cy,bx:px+CS,by:cy},
+                 {dc:0,dr:-1,ax:cx,ay:py,bx:cx,by:py+4},{dc:0,dr:1,ax:cx,ay:py+CS-4,bx:cx,by:py+CS}];
+    ctx.strokeStyle=hexAlpha(pal.border,0.7);ctx.lineWidth=2;
+    sides.forEach(s=>{const nc=grid.get(comp.col+s.dc,comp.row+s.dr);if(nc&&nc.state===STATE.LINK){ctx.beginPath();ctx.moveTo(s.ax,s.ay);ctx.lineTo(s.bx,s.by);ctx.stroke();}});
+    ctx.fillStyle='#ffffff';ctx.font='bold 8px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowColor=pal.glow;ctx.shadowBlur=8;ctx.fillText('CORE',cx,cy);ctx.shadowBlur=0;
+  }
+
+  // ── Draw: VIRUS_CORE (corrupted hex) ─────────────────────────────────────────
+  function drawVirusCore(comp,t){
+    const px=comp.col*CS,py=comp.row*CS,cx=px+CS/2,cy=py+CS/2;
+    const pal=PAL[COMP.VIRUS_CORE];
+    const pulse=0.5+0.5*Math.sin(t*comp.speed+comp.pulse);
+
+    ctx.fillStyle=hexAlpha(pal.glow,0.07+0.09*pulse);ctx.fillRect(px-10,py-10,CS+20,CS+20);
+    hexPath(ctx,cx,cy,CS/2-4);ctx.fillStyle=pal.fill;ctx.fill();
+    ctx.strokeStyle=pal.border;ctx.lineWidth=2;ctx.stroke();
+    hexPath(ctx,cx,cy,CS/4);ctx.strokeStyle=hexAlpha(pal.glow,0.4+0.4*pulse);ctx.lineWidth=1;ctx.stroke();
+
+    // Glitch scan lines
+    for(let i=0;i<3;i++){
+      const gy=py+11+i*11+Math.sin(t*8+i*2.3)*3;
+      ctx.strokeStyle=hexAlpha(pal.glow,0.2+0.18*Math.sin(t*11+i*1.7));
+      ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(px+9,gy);ctx.lineTo(px+CS-9,gy);ctx.stroke();
+    }
+
+    const r=2+pulse*3;
     ctx.fillStyle=pal.glow;ctx.shadowColor=pal.glow;ctx.shadowBlur=10+pulse*8;
     ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
 
     const sides=[{dc:-1,dr:0,ax:px,ay:cy,bx:px+4,by:cy},{dc:1,dr:0,ax:px+CS-4,ay:cy,bx:px+CS,by:cy},
                  {dc:0,dr:-1,ax:cx,ay:py,bx:cx,by:py+4},{dc:0,dr:1,ax:cx,ay:py+CS-4,bx:cx,by:py+CS}];
-    ctx.strokeStyle=hexAlpha(pal.border,0.7);ctx.lineWidth=2;
+    ctx.strokeStyle=hexAlpha(pal.border,0.65);ctx.lineWidth=2;
     sides.forEach(s=>{const nc=grid.get(comp.col+s.dc,comp.row+s.dr);if(nc&&nc.state===STATE.LINK){ctx.beginPath();ctx.moveTo(s.ax,s.ay);ctx.lineTo(s.bx,s.by);ctx.stroke();}});
+    ctx.fillStyle=pal.dot;ctx.font='bold 8px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowColor=pal.glow;ctx.shadowBlur=8;ctx.fillText('VCOR',cx,cy);ctx.shadowBlur=0;
+  }
 
-    ctx.fillStyle='#ffffff';ctx.font='bold 8px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.shadowColor=pal.glow;ctx.shadowBlur=8;ctx.fillText('CORE',cx,cy);ctx.shadowBlur=0;
+  // ── Draw: VIRUS_NODE (corrupted square) ──────────────────────────────────────
+  function drawVirusNode(comp,t){
+    const px=comp.col*CS,py=comp.row*CS,cx=px+CS/2,cy=py+CS/2;
+    const pal=PAL[COMP.VIRUS_NODE];
+    const pulse=0.5+0.5*Math.sin(t*comp.speed+comp.pulse);
+    // sub-pixel jitter
+    const jx=Math.sin(t*17.3+comp.pulse)*1.4;
+    const jy=Math.cos(t*13.1+comp.pulse)*0.9;
+
+    ctx.fillStyle=hexAlpha(pal.glow,0.05+0.06*pulse);ctx.fillRect(px-4+jx,py-4+jy,CS+8,CS+8);
+    ctx.fillStyle=pal.fill;ctx.fillRect(px+2,py+2,CS-4,CS-4);
+    ctx.strokeStyle=pal.border;ctx.lineWidth=1.5;ctx.strokeRect(px+2,py+2,CS-4,CS-4);
+
+    // Corruption X
+    ctx.strokeStyle=hexAlpha(pal.glow,0.5+0.3*pulse);ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(px+7,py+7);ctx.lineTo(px+CS-7,py+CS-7);
+    ctx.moveTo(px+CS-7,py+7);ctx.lineTo(px+7,py+CS-7);
+    ctx.stroke();
+
+    // Flickering glitch bar
+    if(Math.sin(t*23.7+comp.id*0.001)>0.55){
+      const gy=py+10+Math.floor(Math.abs(Math.sin(t*31.3+comp.id*0.003))*(CS-22));
+      ctx.fillStyle=hexAlpha(pal.glow,0.38);ctx.fillRect(px+2,gy,CS-4,2);
+    }
+
+    ctx.fillStyle=pal.glow;ctx.shadowColor=pal.glow;ctx.shadowBlur=7+pulse*5;
+    ctx.beginPath();ctx.arc(cx+jx,cy+jy,2.5,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+
+    const sides=[{dc:-1,dr:0,ax:px,ay:cy,bx:px+4,by:cy},{dc:1,dr:0,ax:px+CS-4,ay:cy,bx:px+CS,by:cy},
+                 {dc:0,dr:-1,ax:cx,ay:py,bx:cx,by:py+4},{dc:0,dr:1,ax:cx,ay:py+CS-4,bx:cx,by:py+CS}];
+    ctx.strokeStyle=hexAlpha(pal.border,0.6);ctx.lineWidth=2;
+    sides.forEach(s=>{const nc=grid.get(comp.col+s.dc,comp.row+s.dr);if(nc&&nc.state===STATE.LINK){ctx.beginPath();ctx.moveTo(s.ax,s.ay);ctx.lineTo(s.bx,s.by);ctx.stroke();}});
+    ctx.fillStyle=pal.dot;ctx.font='bold 8px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowColor=pal.glow;ctx.shadowBlur=5;ctx.fillText('VIRU',cx,cy);ctx.shadowBlur=0;
   }
 
   // ── Draw: pulse halos ────────────────────────────────────────────────────────
   function drawHalos(t,c0,c1,r0,r1){
-    const allComps=[...components,...player.ownedComponents];
+    const allComps=[...components,...player.ownedComponents,...enemy.ownedComponents];
     for(const comp of allComps){
       if(comp.col<c0||comp.col>c1||comp.row<r0||comp.row>r1)continue;
-      // No halo for disconnected player nodes
       if(comp.owner==='player'&&!comp.connected)continue;
       const cx=comp.col*CS+CS/2,cy=comp.row*CS+CS/2;
       const ph=Math.sin(t*comp.speed+comp.pulse);
@@ -774,25 +897,21 @@
     });
   }
 
-  // ── Draw: player network energy flow ─────────────────────────────────────────
-  // Three offset phases per segment for dense flow; heartbeat pulse from CORE
+  // ── Draw: player network flow ────────────────────────────────────────────────
   function drawNetworkFlow(t){
-    const hbPhase=(t*0.35)%1; // heartbeat: full network pulse every ~2.9s
-
+    const hbPhase=(t*0.35)%1;
     player.playerSegments.forEach((seg,segIdx)=>{
       if(!seg.cells.length)return;
       const fromConn=player.connectedIds.has(seg.fromId);
       const toConn  =player.connectedIds.has(seg.toId);
-      if(!fromConn||!toConn)return; // skip disconnected segments
+      if(!fromConn||!toConn)return;
 
       const inPath=player.pathHighlight.has(segIdx);
-      // Tint flow dots by what resource the destination node harvests
       const destYield=player.nodeYield.get(seg.toId);
       const dotGlow=inPath?'#ffee88':destYield==='SI'?'#44ff88':destYield==='DATA'?'#44eeff':destYield==='ENERGY'?'#ffcc44':PAL.plinkGlow;
       const depth=Math.min(player.nodeDepth.get(seg.fromId)??0,player.nodeDepth.get(seg.toId)??0);
-      const speed=1.2+depth*0.15; // outer segments flow slightly slower
+      const speed=1.2+depth*0.15;
 
-      // 3 regular flow dots at staggered phases
       for(let d=0;d<3;d++){
         const phase=((t*speed/(2.0+segIdx%3*0.4))+(d/3))%1;
         const idx=Math.floor(phase*seg.cells.length);
@@ -803,13 +922,11 @@
         ctx.beginPath();ctx.arc(cx,cy,2,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
       }
 
-      // Heartbeat pulse: bright dot that radiates outward from CORE every cycle
-      // Arrives at depth D when hbPhase ≈ D / (maxDepth+1)
       const maxD=player.maxDepth||1;
       const segNormDepth=depth/maxD;
-      const hbWindow=0.12; // how wide the pulse "band" is
+      const hbWindow=0.12;
       const hbDist=Math.abs(hbPhase-segNormDepth);
-      const hbMirror=Math.abs((hbPhase+1)-segNormDepth); // wrap
+      const hbMirror=Math.abs((hbPhase+1)-segNormDepth);
       if(Math.min(hbDist,hbMirror)<hbWindow){
         const hbStr=1-Math.min(hbDist,hbMirror)/hbWindow;
         const hbIdx=Math.floor(hbPhase*seg.cells.length);
@@ -824,47 +941,76 @@
     });
   }
 
-  // ── Draw: expansion ripple animations ────────────────────────────────────────
+  // ── Draw: enemy network flow ──────────────────────────────────────────────────
+  function drawEnemyFlow(t){
+    enemy.ownedSegments.forEach((seg,segIdx)=>{
+      if(!seg.cells.length)return;
+      const speed=0.7+segIdx%3*0.25;
+      for(let d=0;d<2;d++){
+        const phase=((t*speed/2.2)+(d/2))%1;
+        const idx=Math.floor(phase*seg.cells.length);
+        const c=seg.cells[idx];if(!c)continue;
+        const cx=c.col*CS+CS/2,cy=c.row*CS+CS/2;
+        ctx.fillStyle=hexAlpha('#ff2244',0.15);ctx.beginPath();ctx.arc(cx,cy,5,0,Math.PI*2);ctx.fill();
+        ctx.fillStyle='#ff2244';ctx.shadowColor='#ff2244';ctx.shadowBlur=6;
+        ctx.beginPath();ctx.arc(cx,cy,2,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+      }
+    });
+  }
+
+  // ── Draw: player expand ripples ──────────────────────────────────────────────
   function drawAnimations(t){
     for(let i=animations.length-1;i>=0;i--){
       const anim=animations[i];
-      if(anim.t0===null)anim.t0=t; // set on first draw
-
+      if(anim.t0===null)anim.t0=t;
       const progress=(t-anim.t0)/0.9;
       if(progress>=1){animations.splice(i,1);continue;}
-
       const cx=anim.col*CS+CS/2,cy=anim.row*CS+CS/2;
-      const ease=1-Math.pow(1-progress,3); // ease-out
-
-      // Expanding ring
+      const ease=1-Math.pow(1-progress,3);
       const r1=CS/2+ease*CS*1.8;
       ctx.strokeStyle=`rgba(180,80,255,${(1-progress)*0.7})`;
       ctx.lineWidth=2.5*(1-progress);
       ctx.beginPath();ctx.arc(cx,cy,r1,0,Math.PI*2);ctx.stroke();
-
-      // Inner ring (faster)
       const r2=CS/4+ease*CS*1.0;
       ctx.strokeStyle=`rgba(220,160,255,${(1-progress)*0.4})`;
       ctx.lineWidth=1;
       ctx.beginPath();ctx.arc(cx,cy,r2,0,Math.PI*2);ctx.stroke();
-
-      // Center flash (only first 30%)
       if(progress<0.3){
-        const flash=(1-(progress/0.3));
+        const flash=1-(progress/0.3);
         ctx.fillStyle=`rgba(255,200,255,${flash*0.6})`;
         ctx.beginPath();ctx.arc(cx,cy,CS/3*(1-progress*2),0,Math.PI*2);ctx.fill();
       }
     }
   }
 
-  // ── Draw: floating resource collection texts ─────────────────────────────────
+  // ── Draw: enemy expand ripples (red) ────────────────────────────────────────
+  function drawEnemyAnims(t){
+    for(let i=enemyAnims.length-1;i>=0;i--){
+      const anim=enemyAnims[i];
+      if(anim.t0===null)anim.t0=t;
+      const progress=(t-anim.t0)/0.85;
+      if(progress>=1){enemyAnims.splice(i,1);continue;}
+      const cx=anim.col*CS+CS/2,cy=anim.row*CS+CS/2;
+      const ease=1-Math.pow(1-progress,3);
+      const r1=CS/2+ease*CS*1.6;
+      ctx.strokeStyle=`rgba(220,0,40,${(1-progress)*0.72})`;
+      ctx.lineWidth=2.5*(1-progress);
+      ctx.beginPath();ctx.arc(cx,cy,r1,0,Math.PI*2);ctx.stroke();
+      if(progress<0.3){
+        const flash=1-(progress/0.3);
+        ctx.fillStyle=`rgba(200,0,40,${flash*0.5})`;
+        ctx.beginPath();ctx.arc(cx,cy,CS/3*(1-progress*2),0,Math.PI*2);ctx.fill();
+      }
+    }
+  }
+
+  // ── Draw: floating resource texts ────────────────────────────────────────────
   function drawFloatTexts(t){
     for(let i=floatTexts.length-1;i>=0;i--){
       const f=floatTexts[i];
       const age=t-f.t0;
       if(age>f.life){floatTexts.splice(i,1);continue;}
       const prog=age/f.life;
-      // Fade in quickly, then fade out
       const alpha=prog<0.2?(prog/0.2)*0.95:(1-prog)*0.95;
       const wy=f.wy-prog*CS*2.2;
       ctx.globalAlpha=Math.max(0,alpha);
@@ -921,6 +1067,7 @@
     [COMP.CPU]:'#0066ff',[COMP.RAM]:'#00ccff',[COMP.POWER]:'#ff8800',
     [COMP.ENEMY_NODE]:'#ff0044',[COMP.RESOURCE_NODE]:'#00ff66',
     [COMP.CORE_NODE]:'#ffffff',[COMP.PLAYER_NODE]:'#aa44ff',
+    [COMP.VIRUS_CORE]:'#ff2255',[COMP.VIRUS_NODE]:'#cc0033',
   };
 
   function drawMinimap(t){
@@ -932,6 +1079,8 @@
         if(cell.owner==='player'){
           const conn=player.connectedIds.has(cell.fromId)&&player.connectedIds.has(cell.toId);
           mmCtx.fillStyle=conn?'#6622aa':'#221133';
+        }else if(cell.owner==='enemy'){
+          mmCtx.fillStyle='#550011';
         }else{
           mmCtx.fillStyle='#007755';
         }
@@ -950,13 +1099,18 @@
         mmCtx.fillRect(comp.col*CS*MM_SX-1,comp.row*CS*MM_SY-1,MM_PW+2,MM_PH+2);
       }
     });
+    enemy.ownedComponents.forEach(comp=>{
+      const blink=comp.compType===COMP.VIRUS_CORE&&Math.sin(t*5)>0;
+      mmCtx.fillStyle=blink?'#ff4466':MM_CLR[comp.compType];
+      mmCtx.fillRect(comp.col*CS*MM_SX-1,comp.row*CS*MM_SY-1,MM_PW+2,MM_PH+2);
+    });
     const W=canvas.width,H=canvas.height;
     const vw=(W/zoom)*MM_SX,vh=(H/zoom)*MM_SY;
     const vx=(camX-(W/zoom)/2)*MM_SX,vy=(camY-(H/zoom)/2)*MM_SY;
     mmCtx.strokeStyle='#00ffcc';mmCtx.lineWidth=1;mmCtx.strokeRect(vx,vy,vw,vh);
   }
 
-  // ── HUD update ───────────────────────────────────────────────────────────────
+  // ── HUD ──────────────────────────────────────────────────────────────────────
   let lastFpsTime=0,fpsFrames=0,fpsVal=0;
   function energyBar(v,max,w=10){const f=Math.round((v/max)*w);return'▓'.repeat(f)+'░'.repeat(w-f);}
 
@@ -977,7 +1131,6 @@
     const total=player.ownedComponents.length;
     const conn=player.ownedComponents.filter(c=>c.connected).length;
     document.getElementById('res-nodes').textContent=`NODES  ${conn}/${total} CONNECTED`;
-
     const netOk=conn===total;
     document.getElementById('res-net').textContent=netOk?'NETWORK: STABLE':'NETWORK: DEGRADED';
     document.getElementById('res-net').style.color=netOk?'#00ff88':'#ffaa00';
@@ -986,22 +1139,51 @@
     document.getElementById('res-eff').textContent=`EFFICIENCY: ${eff}%`;
     document.getElementById('res-eff').style.color=eff>=80?'#ffcc44':eff>=50?'#ff8844':'#ff4444';
 
+    // Threat assessment: closest enemy node to any player node
+    const eCount=enemy.ownedComponents.length;
+    const threatEl=document.getElementById('res-threat');
+    if(eCount===0){
+      threatEl.textContent='THREAT: NONE';threatEl.style.color='#336633';
+    }else{
+      let minDist=9999;
+      for(const p of player.ownedComponents){
+        for(const e2 of enemy.ownedComponents){
+          const d=Math.abs(e2.col-p.col)+Math.abs(e2.row-p.row);
+          if(d<minDist)minDist=d;
+        }
+      }
+      if(minDist<=8){
+        threatEl.textContent=`THREAT: HIGH  [${eCount} nodes]`;threatEl.style.color='#ff2244';
+      }else if(minDist<=20){
+        threatEl.textContent=`THREAT: MED   [${eCount} nodes]`;threatEl.style.color='#ff8800';
+      }else{
+        threatEl.textContent=`THREAT: LOW   [${eCount} nodes]`;threatEl.style.color='#ffcc00';
+      }
+    }
+
     if(player.flashTimer<=0)document.getElementById('hud-msg').textContent='';
   }
 
   // ── Main loop ────────────────────────────────────────────────────────────────
-  let lastNow=0;
+  let lastNow=0,gameT0=null;
 
   function loop(now){
     const dt=Math.min((now-lastNow)/1000,0.1);
     lastNow=now;
     const t=now*0.001;
 
+    // Anchor enemy timers to first frame so intervals are relative to game start
+    if(gameT0===null){gameT0=t;enemy.lastExpand=t;}
+
     player.energy=Math.min(player.maxEnergy,player.energy+player.energyRegen*dt);
     if(player.flashTimer>0)player.flashTimer-=dt;
-
-    // Passive resource income on fixed tick
     if(t-player.lastIncomeTick>=player.incomeTick){player.lastIncomeTick=t;processIncome(t);}
+
+    // Enemy expansion: starts after 8s, then every nextExpand seconds
+    if(t-gameT0>8&&t-enemy.lastExpand>=enemy.nextExpand){
+      enemy.lastExpand=t;
+      enemyExpand(t);
+    }
 
     const moving=(keys['ArrowLeft']||keys['KeyA'])||(keys['ArrowRight']||keys['KeyD'])||
                  (keys['ArrowUp']  ||keys['KeyW'])||(keys['ArrowDown'] ||keys['KeyS']);
@@ -1028,15 +1210,11 @@
     const c0=Math.max(0,Math.floor(vb.l/CS)-1),c1=Math.min(GRID_COLS-1,Math.ceil(vb.r/CS)+1);
     const r0=Math.max(0,Math.floor(vb.t/CS)-1),r1=Math.min(GRID_ROWS-1,Math.ceil(vb.b/CS)+1);
 
-    // Background
     ctx.fillStyle=PAL.bg;ctx.fillRect(0,0,WORLD_W,WORLD_H);
 
-    // Minor grid
     ctx.strokeStyle=PAL.gridMinor;ctx.lineWidth=1/zoom;
     for(let c=c0;c<=c1+1;c++){ctx.beginPath();ctx.moveTo(c*CS,r0*CS);ctx.lineTo(c*CS,(r1+1)*CS);ctx.stroke();}
     for(let r=r0;r<=r1+1;r++){ctx.beginPath();ctx.moveTo(c0*CS,r*CS);ctx.lineTo((c1+1)*CS,r*CS);ctx.stroke();}
-
-    // Major grid
     ctx.strokeStyle=PAL.gridMajor;ctx.lineWidth=1.5/zoom;
     for(let c=Math.floor(c0/8)*8;c<=c1+8;c+=8){if(c<0||c>GRID_COLS)continue;ctx.beginPath();ctx.moveTo(c*CS,r0*CS);ctx.lineTo(c*CS,(r1+1)*CS);ctx.stroke();}
     for(let r=Math.floor(r0/8)*8;r<=r1+8;r+=8){if(r<0||r>GRID_ROWS)continue;ctx.beginPath();ctx.moveTo(c0*CS,r*CS);ctx.lineTo((c1+1)*CS,r*CS);ctx.stroke();}
@@ -1044,33 +1222,41 @@
     // 1. Expansion hints
     drawExpansionHints(t);
 
-    // 2. All link cells (world + player, with connectivity colouring)
+    // 2. All link cells (world + player + enemy)
     for(let r=r0;r<=r1;r++)for(let c=c0;c<=c1;c++){const cell=grid.get(c,r);if(cell&&cell.state===STATE.LINK)drawLinkCell(c,r);}
 
-    // 3. Pulse halos (skip disconnected player nodes)
+    // 3. Halos
     drawHalos(t,c0,c1,r0,r1);
 
-    // 4. Components
+    // 4. World components
     for(const comp of components){if(comp.col>=c0&&comp.col<=c1&&comp.row>=r0&&comp.row<=r1)drawComponent(comp,t);}
+
+    // 5. Player components
     for(const comp of player.ownedComponents){if(comp.col>=c0&&comp.col<=c1&&comp.row>=r0&&comp.row<=r1)drawComponent(comp,t);}
 
-    // 5. World signal dots
+    // 6. Enemy components
+    for(const comp of enemy.ownedComponents){if(comp.col>=c0&&comp.col<=c1&&comp.row>=r0&&comp.row<=r1)drawComponent(comp,t);}
+
+    // 7. World signal dots
     drawWorldSignals(t);
 
-    // 6. Player network energy flow (heartbeat + flow dots)
+    // 8. Player network flow
     drawNetworkFlow(t);
 
-    // 7. Expansion animations
-    drawAnimations(t);
+    // 9. Enemy network flow
+    drawEnemyFlow(t);
 
-    // 8. Floating resource texts
+    // 10. Expand ripples (player purple, enemy red)
+    drawAnimations(t);
+    drawEnemyAnims(t);
+
+    // 11. Floating resource texts
     drawFloatTexts(t);
 
-    // 9. Selection highlight
+    // 12. Selection highlight
     drawSelection(t);
 
     ctx.restore();
-
     drawMinimap(t);
     updateHUD(now);
     requestAnimationFrame(loop);
