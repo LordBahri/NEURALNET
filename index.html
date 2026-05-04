@@ -19,10 +19,13 @@
   .hud-row   { color:#00ffcc; text-shadow:0 0 7px #00ffcc; }
   .hud-sep   { border-top:1px solid rgba(0,255,204,0.12); margin:5px 0 3px; }
 
-  #res-energy { color:#ffcc00; text-shadow:0 0 6px #ffaa00; }
-  #res-nodes  { color:#bb55ff; text-shadow:0 0 5px #8833cc; }
-  #res-net    { color:#00ff88; text-shadow:0 0 5px #00cc66; font-size:10px; }
-  #hud-msg    { color:#ff4466; text-shadow:0 0 6px #ff2244; font-size:10px; min-height:15px; }
+  #res-energy  { color:#ffcc00; text-shadow:0 0 6px #ffaa00; }
+  #res-silicon { color:#44ff88; text-shadow:0 0 6px #00cc55; }
+  #res-data    { color:#44eeff; text-shadow:0 0 6px #0099cc; }
+  #res-nodes   { color:#bb55ff; text-shadow:0 0 5px #8833cc; }
+  #res-net     { color:#00ff88; text-shadow:0 0 5px #00cc66; font-size:10px; }
+  #res-eff     { color:#ffaa44; text-shadow:0 0 5px #ff8800; font-size:10px; }
+  #hud-msg     { color:#ff4466; text-shadow:0 0 6px #ff2244; font-size:10px; min-height:15px; }
   #hud-cell   { color:#aaffdd; font-size:10px; line-height:1.7; min-height:28px; }
   #hud-cell b { color:#fff; font-weight:normal; }
   #hud-path   { color:#aa66ff; font-size:10px; min-height:15px; }
@@ -49,9 +52,13 @@
   <div class="hud-row" id="hud-zoom">ZOOM: 1.00x</div>
   <div class="hud-row" id="hud-fps">FPS: --</div>
   <div class="hud-sep"></div>
-  <div id="res-energy">ENERGY ░░░░░░░░░░ 0/100</div>
+  <div id="res-energy">ENERGY  ░░░░░░░░░░ 0/100</div>
+  <div id="res-silicon">SILICON ░░░░░░░░░░  0</div>
+  <div id="res-data">DATA    ░░░░░░░░░░  0</div>
+  <div class="hud-sep"></div>
   <div id="res-nodes">NODES  0/0 CONNECTED</div>
   <div id="res-net">NETWORK: INITIALIZING</div>
+  <div id="res-eff">EFFICIENCY: ---%</div>
   <div class="hud-sep"></div>
   <div id="hud-msg"></div>
   <div id="hud-path"></div>
@@ -205,6 +212,10 @@
   // Each entry: {col, row, t0}   (expand ripple)
   const animations=[];
 
+  // ── Floating resource texts ───────────────────────────────────────────────────
+  // Each entry: {wx, wy, text, color, t0, life}   (world-space coords)
+  const floatTexts=[];
+
   // ── Player state ─────────────────────────────────────────────────────────────
   const player={
     col:0,row:0,
@@ -228,6 +239,13 @@
     expandCost:15,
     flashMsg:'',flashTimer:0,
     coreId:null,
+
+    // ── Resources ──────────────────────────────────────────────────────────────
+    silicon:0, maxSilicon:150,
+    data:0,    maxData:150,
+    efficiency:1.0,
+    incomeTick:3.0, lastIncomeTick:-99,
+    nodeYield:new Map(),  // Map<id, 'SI'|'DATA'|'ENERGY'>
   };
 
   // ── BFS connectivity from CORE_NODE ─────────────────────────────────────────
@@ -298,6 +316,7 @@
             player.graph.set(id,new Set());
             recomputeConnectivity();
             recomputeExpandable();
+            computeNodeYields();
             return;
           }
         }
@@ -319,6 +338,67 @@
   function showFlash(msg){
     player.flashMsg=msg;player.flashTimer=1.8;
     document.getElementById('hud-msg').textContent=msg;
+  }
+
+  // ── Resource gathering ───────────────────────────────────────────────────────
+  function spawnFloat(col,row,text,color,t){
+    floatTexts.push({
+      wx:col*CS+CS/2+(Math.random()-0.5)*CS*0.4,
+      wy:row*CS+CS/4,
+      text,color,t0:t,life:1.5,
+    });
+  }
+
+  // For each connected player node, determine what world resource it taps (reach=2).
+  // Priority: RESOURCE_NODE > CPU/RAM > POWER.  Stored in player.nodeYield.
+  function computeNodeYields(){
+    player.nodeYield=new Map();
+    const reach=2;
+    for(const comp of player.ownedComponents){
+      if(!comp.connected)continue;
+      let best=null,bestPri=99;
+      for(const wc of components){
+        const d=Math.abs(wc.col-comp.col)+Math.abs(wc.row-comp.row);
+        if(d>reach)continue;
+        let yt=null,pri=99;
+        if(wc.compType===COMP.RESOURCE_NODE){yt='SI';pri=0;}
+        else if(wc.compType===COMP.CPU||wc.compType===COMP.RAM){yt='DATA';pri=1;}
+        else if(wc.compType===COMP.POWER){yt='ENERGY';pri=2;}
+        if(yt&&pri<bestPri){best=yt;bestPri=pri;}
+      }
+      if(best)player.nodeYield.set(comp.id,best);
+    }
+  }
+
+  // Runs on a fixed tick; grants resources scaled by network efficiency.
+  function processIncome(t){
+    const connArr=player.ownedComponents.filter(c=>c.connected);
+    player.efficiency=player.ownedComponents.length>0?connArr.length/player.ownedComponents.length:1;
+    computeNodeYields();
+
+    const reach=2;
+    let siGain=0,dataGain=0,eGain=0;
+    for(const comp of connArr){
+      let floated=false;
+      for(const wc of components){
+        const d=Math.abs(wc.col-comp.col)+Math.abs(wc.row-comp.row);
+        if(d>reach)continue;
+        if(wc.compType===COMP.RESOURCE_NODE){
+          siGain+=2;
+          if(!floated){spawnFloat(comp.col,comp.row,'+SI','#44ff88',t);floated=true;}
+        }else if(wc.compType===COMP.CPU||wc.compType===COMP.RAM){
+          dataGain+=2;
+          if(!floated){spawnFloat(comp.col,comp.row,'+DATA','#44eeff',t);floated=true;}
+        }else if(wc.compType===COMP.POWER){
+          eGain+=10;
+          if(!floated){spawnFloat(comp.col,comp.row,'+EN','#ffcc44',t);floated=true;}
+        }
+      }
+    }
+    const eff=player.efficiency;
+    player.silicon =Math.min(player.maxSilicon, player.silicon +Math.round(siGain  *eff));
+    player.data    =Math.min(player.maxData,    player.data    +Math.round(dataGain*eff));
+    player.energy  =Math.min(player.maxEnergy,  player.energy  +Math.round(eGain   *eff));
   }
 
   // ── Expansion ────────────────────────────────────────────────────────────────
@@ -372,6 +452,7 @@
     // Update graph + connectivity + expandable
     recomputeConnectivity();
     recomputeExpandable();
+    computeNodeYields();
 
     // Expansion animation
     animations.push({col,row,t0:null}); // t0 set on first draw
@@ -604,6 +685,20 @@
     ctx.moveTo(px+CS-8,py+8);ctx.lineTo(px+8,py+CS-8);
     ctx.stroke();
 
+    // Harvest indicator: corner brackets tinted by resource type
+    const yType=player.nodeYield.get(comp.id);
+    if(yType){
+      const yClr=yType==='SI'?'#44ff88':yType==='DATA'?'#44eeff':'#ffcc44';
+      ctx.strokeStyle=hexAlpha(yClr,0.72*dimF);ctx.lineWidth=1.5;
+      const m=7,s=6;
+      ctx.beginPath();
+      ctx.moveTo(px+m,py+m+s);ctx.lineTo(px+m,py+m);ctx.lineTo(px+m+s,py+m);
+      ctx.moveTo(px+CS-m-s,py+m);ctx.lineTo(px+CS-m,py+m);ctx.lineTo(px+CS-m,py+m+s);
+      ctx.moveTo(px+m,py+CS-m-s);ctx.lineTo(px+m,py+CS-m);ctx.lineTo(px+m+s,py+CS-m);
+      ctx.moveTo(px+CS-m-s,py+CS-m);ctx.lineTo(px+CS-m,py+CS-m);ctx.lineTo(px+CS-m,py+CS-m-s);
+      ctx.stroke();
+    }
+
     ctx.fillStyle=hexAlpha(pal.glow,dimF);ctx.beginPath();ctx.arc(cx,cy,3,0,Math.PI*2);ctx.fill();
 
     const sides=[{dc:-1,dr:0,ax:px,ay:cy,bx:px+4,by:cy},{dc:1,dr:0,ax:px+CS-4,ay:cy,bx:px+CS,by:cy},
@@ -691,7 +786,9 @@
       if(!fromConn||!toConn)return; // skip disconnected segments
 
       const inPath=player.pathHighlight.has(segIdx);
-      const dotGlow=inPath?'#ffee88':PAL.plinkGlow;
+      // Tint flow dots by what resource the destination node harvests
+      const destYield=player.nodeYield.get(seg.toId);
+      const dotGlow=inPath?'#ffee88':destYield==='SI'?'#44ff88':destYield==='DATA'?'#44eeff':destYield==='ENERGY'?'#ffcc44':PAL.plinkGlow;
       const depth=Math.min(player.nodeDepth.get(seg.fromId)??0,player.nodeDepth.get(seg.toId)??0);
       const speed=1.2+depth*0.15; // outer segments flow slightly slower
 
@@ -757,6 +854,24 @@
         ctx.fillStyle=`rgba(255,200,255,${flash*0.6})`;
         ctx.beginPath();ctx.arc(cx,cy,CS/3*(1-progress*2),0,Math.PI*2);ctx.fill();
       }
+    }
+  }
+
+  // ── Draw: floating resource collection texts ─────────────────────────────────
+  function drawFloatTexts(t){
+    for(let i=floatTexts.length-1;i>=0;i--){
+      const f=floatTexts[i];
+      const age=t-f.t0;
+      if(age>f.life){floatTexts.splice(i,1);continue;}
+      const prog=age/f.life;
+      // Fade in quickly, then fade out
+      const alpha=prog<0.2?(prog/0.2)*0.95:(1-prog)*0.95;
+      const wy=f.wy-prog*CS*2.2;
+      ctx.globalAlpha=Math.max(0,alpha);
+      ctx.fillStyle=f.color;ctx.shadowColor=f.color;ctx.shadowBlur=8;
+      ctx.font='bold 10px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText(f.text,f.wx,wy);
+      ctx.shadowBlur=0;ctx.globalAlpha=1;
     }
   }
 
@@ -853,7 +968,11 @@
     document.getElementById('hud-fps').textContent   =`FPS: ${fpsVal||'--'}`;
 
     const e=Math.floor(player.energy);
-    document.getElementById('res-energy').textContent=`ENERGY ${energyBar(e,player.maxEnergy)} ${e}/${player.maxEnergy}`;
+    document.getElementById('res-energy').textContent =`ENERGY  ${energyBar(e,player.maxEnergy)} ${e}/${player.maxEnergy}`;
+    const si=Math.floor(player.silicon);
+    document.getElementById('res-silicon').textContent=`SILICON ${energyBar(si,player.maxSilicon)} ${si}`;
+    const da=Math.floor(player.data);
+    document.getElementById('res-data').textContent   =`DATA    ${energyBar(da,player.maxData)} ${da}`;
 
     const total=player.ownedComponents.length;
     const conn=player.ownedComponents.filter(c=>c.connected).length;
@@ -862,6 +981,10 @@
     const netOk=conn===total;
     document.getElementById('res-net').textContent=netOk?'NETWORK: STABLE':'NETWORK: DEGRADED';
     document.getElementById('res-net').style.color=netOk?'#00ff88':'#ffaa00';
+
+    const eff=Math.round(player.efficiency*100);
+    document.getElementById('res-eff').textContent=`EFFICIENCY: ${eff}%`;
+    document.getElementById('res-eff').style.color=eff>=80?'#ffcc44':eff>=50?'#ff8844':'#ff4444';
 
     if(player.flashTimer<=0)document.getElementById('hud-msg').textContent='';
   }
@@ -876,6 +999,9 @@
 
     player.energy=Math.min(player.maxEnergy,player.energy+player.energyRegen*dt);
     if(player.flashTimer>0)player.flashTimer-=dt;
+
+    // Passive resource income on fixed tick
+    if(t-player.lastIncomeTick>=player.incomeTick){player.lastIncomeTick=t;processIncome(t);}
 
     const moving=(keys['ArrowLeft']||keys['KeyA'])||(keys['ArrowRight']||keys['KeyD'])||
                  (keys['ArrowUp']  ||keys['KeyW'])||(keys['ArrowDown'] ||keys['KeyS']);
@@ -937,7 +1063,10 @@
     // 7. Expansion animations
     drawAnimations(t);
 
-    // 8. Selection highlight
+    // 8. Floating resource texts
+    drawFloatTexts(t);
+
+    // 9. Selection highlight
     drawSelection(t);
 
     ctx.restore();
